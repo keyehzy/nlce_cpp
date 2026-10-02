@@ -26,8 +26,8 @@ Requires CMake >= 3.24, a C++20 compiler, FLINT 3, GMP and Boost headers
 `nlce_run geometry --nsites s` prints cluster, class and key counts;
 `nlce_run bench` times one cluster (see the header of `src/main.cpp`).
 
-On an Apple M4 (10 cores, 16 GB) the six-V/U set takes about 30 seconds at
-s = 9 and 8 minutes at s = 10 (1.5 GB peak), reproducing the HPC pickles in
+On an Apple M4 (10 cores, 16 GB) the six-V/U set takes about 25 seconds at
+s = 9 and 6 minutes at s = 10 (1.4 GB peak), reproducing the HPC pickles in
 `validate/` exactly.
 
 ## Method

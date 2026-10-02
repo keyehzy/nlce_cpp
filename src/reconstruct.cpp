@@ -50,20 +50,29 @@ Reconstruction reconstruct(const std::vector<u64>& primes, const std::vector<std
       fmpz_CRT_ui(b.x, a.x, moduli[i - 1].x, residues[i][c], primes[i], 0);
       fmpz_swap(a.x, b.x);
     }
-    if (!fmpq_reconstruct_fmpz(q.x, a.x, moduli[nrec - 1].x)) return {};
-    for (int i = nrec; i < static_cast<int>(primes.size()); ++i) {
+    bool solved = fmpq_reconstruct_fmpz(q.x, a.x, moduli[nrec - 1].x);
+    for (int i = nrec; i < static_cast<int>(primes.size()) && solved; ++i) {
       const Modulus m(primes[i]);
       const u64 num = fmpz_fdiv_ui(fmpq_numref(q.x), primes[i]);
       const u64 den = fmpz_fdiv_ui(fmpq_denref(q.x), primes[i]);
-      if (den == 0 || m.mul(num, m.inv(den)) != residues[i][c]) return {};
+      solved = den != 0 && m.mul(num, m.inv(den)) == residues[i][c];
     }
+    if (!solved) {
+      out.unsolved.push_back(c);
+      continue;
+    }
+    if (!out.unsolved.empty()) continue;
     const int bits = static_cast<int>(fmpz_bits(fmpq_numref(q.x)) + fmpz_bits(fmpq_denref(q.x)));
     out.max_bits = std::max(out.max_bits, bits);
     char* s = fmpq_get_str(nullptr, 10, q.x);
     out.values.emplace_back(s);
     flint_free(s);
   }
-  out.ok = true;
+  out.ok = out.unsolved.empty();
+  if (!out.ok) {
+    out.values.clear();
+    out.max_bits = 0;
+  }
   return out;
 }
 

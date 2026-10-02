@@ -28,6 +28,13 @@ struct SeriesLayout {
   std::size_t chi() const { return s() + static_cast<std::size_t>(ncd) * (ng + 1); }
   std::size_t m0() const { return chi() + (nc + 1); }
   std::size_t size() const { return m0() + (nc + 1); }
+
+  // Perturbative order of coefficient i.
+  int order(std::size_t i) const {
+    if (i < hp()) return static_cast<int>(i);
+    if (i < chi()) return static_cast<int>((i - hp()) % (ng + 1));
+    return static_cast<int>(i < m0() ? i - chi() : i - m0());
+  }
 };
 
 struct PassOptions {

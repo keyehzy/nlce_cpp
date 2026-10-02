@@ -18,6 +18,14 @@ double since(std::chrono::steady_clock::time_point t0) {
 
 }  // namespace
 
+// PRIME SCHEDULE.  Residues from every pass are kept, so a further pass costs
+// only its replanning, a small fraction of one lane block, while every prime
+// beyond what a V/U needs costs a full lane.  So each V/U starts low and grows
+// by a fifth.  The spare lanes that fill a pass's last block go to the V/U with
+// the most orders still unsolved.  At s = 9 and 10 this lands within a block or
+// so of the fewest lanes that could reconstruct the series.
+constexpr int kInitialPrimes = 3;
+
 void lattice_series(const Geometry& geo, int ng, int nc, const std::vector<Rational>& vs, const DriverOptions& opts,
                     const std::function<void(const LatticeSeries&)>& done) {
   const int ncheck = opts.check_primes;
@@ -31,10 +39,12 @@ void lattice_series(const Geometry& geo, int ng, int nc, const std::vector<Ratio
     int target = 0;
     std::vector<u64> primes;
     std::vector<std::vector<u64>> residues;
+    int unsolved_orders = 0;  // orders with a coefficient the last attempt missed
     bool done = false;
   };
   std::vector<State> states;
-  for (const auto& v : vs) states.push_back({v, fixed > 0 ? fixed + ncheck : 8 + ncheck, {}, {}, false});
+  for (const auto& v : vs) states.push_back({v, (fixed > 0 ? fixed : kInitialPrimes) + ncheck, {}, {}, 0, false});
+  const SeriesLayout layout{ng, nc, static_cast<int>(geo.displacements.size())};
 
   std::vector<u64> pool;
   for (int pass = 1;; ++pass) {
@@ -45,7 +55,9 @@ void lattice_series(const Geometry& geo, int ng, int nc, const std::vector<Ratio
     for (State& st : states) {
       if (st.done) continue;
       pending += st.target - static_cast<int>(st.primes.size());
-      if (!hungriest || st.target > hungriest->target) hungriest = &st;
+      if (!hungriest || std::pair(st.unsolved_orders, st.target) > std::pair(hungriest->unsolved_orders, hungriest->target)) {
+        hungriest = &st;
+      }
     }
     if (hungriest) hungriest->target += (kLanes - pending % kLanes) % kLanes;
 
@@ -77,7 +89,10 @@ void lattice_series(const Geometry& geo, int ng, int nc, const std::vector<Ratio
       if (!rec.ok) {
         if (fixed > 0) throw std::runtime_error("reconstruction failed for V/U = " + to_string(st.v) + "; raise --primes");
         const int have = static_cast<int>(st.primes.size()) - ncheck;
-        st.target = have + std::max(4, have / 2) + ncheck;
+        st.target = have + std::max(4, (have + 4) / 5) + ncheck;
+        int lowest = ng;
+        for (std::size_t c : rec.unsolved) lowest = std::min(lowest, layout.order(c));
+        st.unsolved_orders = ng + 1 - lowest;
         if (opts.verbose) {
           std::fprintf(stderr, "  V/U=%s: %d primes insufficient, retrying with %d\n", to_string(st.v).c_str(), have,
                        st.target - ncheck);
