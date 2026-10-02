@@ -13,7 +13,8 @@ Requires CMake >= 3.24, a C++20 compiler, FLINT 3, GMP and Boost headers
 
     cmake -S . -B build -G Ninja
     cmake --build build
-    ./build/nlce_tests
+    ctest --test-dir build                   # unit tests + s = 7 regression
+    cmake --build build --target validate    # full s = 9 run vs validate/
 
 ## Run
 
@@ -60,7 +61,15 @@ it from the Python project with
     mkdir -p validate && cp ../series/*_site_tri_s{9,10}_*.pkl validate/
 
     python3 tools/to_pickles.py out_s10 out_s10/pkl
-    python3 tools/compare_pickles.py out_s10/pkl                # lattice series vs validate/
+    python3 tools/compare_pickles.py --bytes out_s10/pkl        # lattice series vs validate/
+
+Two checks run from the build directory.  An s-site expansion is exact
+through x^(s-1) (x^(s-2) for chi and m0), so `tools/regression.py`, the
+`regression` ctest, runs s = 7 in under a second and requires its series to
+equal the leading coefficients of the s = 9 references; it is skipped when
+`validate/` is empty.  The `validate` target runs s = 9 in full (about a
+minute) and requires byte-identical pickles.  Set `-DNLCE_REF_DIR=...` to use
+references elsewhere.
 
 `tools/check_cluster.py` compares per-cluster series against the Python
 reference code, which it expects in `../series` (pt.py, chi.py, neutral.py):

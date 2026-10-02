@@ -30,7 +30,7 @@ def coefficient(x):
     return ZERO if f == 0 else f
 
 
-def convert(path, dst):
+def convert(path, dst, quiet=False):
     d = json.loads(path.read_text())
     n, ng, nc = d["nsites"], d["order_gap"], d["order_chi"]
     v = Fraction(d["v"])
@@ -51,7 +51,8 @@ def convert(path, dst):
         out = dst / ("%s_site_tri_s%d_v%s.pkl" % (prefix, n, tag))
         with out.open("wb") as f:
             pickle.dump(obj, f, protocol=4)
-        print(out)
+        if not quiet:
+            print(out)
 
 
 def main():
