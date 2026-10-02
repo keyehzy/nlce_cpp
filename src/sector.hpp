@@ -22,6 +22,8 @@
 
 namespace nlce {
 
+inline constexpr int kMaxOccupation = 15;  // four bits per site
+
 inline int occ(u64 state, int site) { return static_cast<int>((state >> (4 * site)) & 15u); }
 inline u64 site_unit(int site) { return u64(1) << (4 * site); }
 u64 uniform_state(int nv, int n);

@@ -28,9 +28,15 @@
 #include "modp.hpp"
 #include "sector.hpp"
 
+#include <cstdint>
 #include <vector>
 
 namespace nlce {
+
+// Limits that keep the lazy modular accumulation in cluster.cpp exact; see
+// the overflow budget there.  plan_cluster rejects inputs beyond them.
+inline constexpr int kMaxOrder = 64;
+inline constexpr std::uint32_t kMaxSectorStates = std::uint32_t(1) << 28;
 
 struct ClusterInput {
   int nv = 0;

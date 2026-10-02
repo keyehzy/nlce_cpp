@@ -1,6 +1,7 @@
 #include "sector.hpp"
 
 #include <algorithm>
+#include <limits>
 #include <map>
 #include <stdexcept>
 
@@ -15,7 +16,8 @@ u64 uniform_state(int nv, int n) {
 Sector build_sector(int nv, const std::vector<Edge>& edges, const std::vector<u64>& seeds, int dmax,
                     bool seed_distances) {
   if (nv > kMaxVertices) throw std::invalid_argument("cluster too large for packed states");
-  if (edges.size() > 255) throw std::invalid_argument("too many edges");
+  if (edges.size() > std::numeric_limits<std::uint8_t>::max()) throw std::invalid_argument("too many edges");
+  if (dmax > std::numeric_limits<std::uint8_t>::max()) throw std::invalid_argument("hop distance too large");
   Sector sec;
   sec.nv = nv;
   sec.nseeds = static_cast<int>(seeds.size());
@@ -41,7 +43,7 @@ Sector build_sector(int nv, const std::vector<Edge>& edges, const std::vector<u6
       for (auto [i, j] : edges) {
         for (auto [from, to] : {std::pair{j, i}, std::pair{i, j}}) {
           if (!occ(st, from)) continue;
-          if (occ(st, to) == 15) throw std::overflow_error("site occupation exceeds packed range");
+          if (occ(st, to) == kMaxOccupation) throw std::overflow_error("site occupation exceeds packed range");
           add(st - site_unit(from) + site_unit(to), d);
         }
       }
@@ -57,7 +59,12 @@ Sector build_sector(int nv, const std::vector<Edge>& edges, const std::vector<u6
     for (int i = 0; i < nv; ++i) onsite += occ(st, i) * (occ(st, i) - 1) / 2;
     for (auto [i, j] : edges) bonds += (occ(st, i) - 1) * (occ(st, j) - 1);
     auto [it, fresh] = energy_index.try_emplace({onsite, bonds}, static_cast<int>(sec.energies.size()));
-    if (fresh) sec.energies.push_back({onsite, bonds});
+    if (fresh) {
+      if (sec.energies.size() > std::numeric_limits<std::uint16_t>::max()) {
+        throw std::overflow_error("too many distinct unperturbed energies");
+      }
+      sec.energies.push_back({onsite, bonds});
+    }
     sec.energy_class[t] = static_cast<std::uint16_t>(it->second);
   }
 
@@ -73,7 +80,6 @@ Sector build_sector(int nv, const std::vector<Edge>& edges, const std::vector<u6
         if (!occ(st, to)) continue;
         auto it = sec.index.find(st - site_unit(to) + site_unit(from));
         if (it == sec.index.end()) continue;
-        if (occ(st, from) + 1 > 255) throw std::overflow_error("occupation");
         sec.moves.push_back({it->second, static_cast<std::uint8_t>(occ(st, from) + 1),
                              static_cast<std::uint8_t>(occ(st, to)), static_cast<std::uint8_t>(e),
                              static_cast<std::int8_t>(to < from ? 1 : -1)});

@@ -22,7 +22,8 @@ using u128 = unsigned __int128;
 // Moduli are primes below 2^50.  The bound leaves headroom for lazy
 // accumulation: a small integer (< 16) times a residue is < 2^54, so a sum of
 // a few hundred of those still fits a u64, and a product of two residues is
-// < 2^100, so a u128 absorbs 2^20 of them before it has to be folded.
+// < 2^100, so a u128 absorbs 2^28 of them before it has to be folded.  The
+// overflow budget in cluster.cpp checks every such sum against these limits.
 inline constexpr int kPrimeBits = 50;
 
 class Modulus {

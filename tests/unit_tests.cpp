@@ -157,6 +157,17 @@ void test_small_pass() {
   check(ok, "cumulant cancellation, s<=5");
 }
 
+// Inputs beyond the overflow budget must be rejected, not computed wrongly.
+void test_limits() {
+  bool threw = false;
+  try {
+    plan_cluster({2, {{0, 1}}, {}, kMaxOrder + 1, 1});
+  } catch (const std::invalid_argument&) {
+    threw = true;
+  }
+  check(threw, "order beyond kMaxOrder rejected");
+}
+
 }  // namespace
 
 int main() {
@@ -165,6 +176,7 @@ int main() {
   test_canonical_form();
   test_geometry();
   test_small_pass();
+  test_limits();
   if (failures) {
     std::fprintf(stderr, "%d failure(s)\n", failures);
     return 1;

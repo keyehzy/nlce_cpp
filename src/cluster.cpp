@@ -11,6 +11,32 @@ namespace {
 constexpr int L = kLanes;
 using Vec = std::vector<u64>;
 
+// OVERFLOW BUDGET.  Residues are below 2^kPrimeBits and reductions are
+// deferred, so every unreduced sum must provably fit its accumulator.
+//
+//  * u64 sums of coefficient * residue over the incoming moves of one state
+//    (hopping, current, H_eff recursions): a coefficient is an occupation,
+//    at most kMaxOccupation, and a state has at most nv(nv - 1) moves.
+//  * u128 sums of residue products: at most kMaxOrder * kMaxVertices terms
+//    in the energy and H_eff recursions and the series divisions, and at
+//    most kMaxSectorStates terms in a dot product.
+//  * correlations(): per state and order, at most two moves per vertex pair
+//    times kMaxOrder + 1 splits a + b, each coefficient * residue * residue,
+//    folded every kFoldStates states.
+constexpr std::uint32_t kFoldStates = 1024;
+
+// True when `terms` values, each at most `term`, sum to at most `limit`.
+constexpr bool fits(u128 terms, u128 term, u128 limit) { return terms <= limit / term; }
+
+constexpr u128 kResidueMax = (u128(1) << kPrimeBits) - 1;
+constexpr u128 kU64Max = ~u64(0);
+constexpr u128 kU128Max = ~u128(0);
+static_assert(fits(kMaxVertices * (kMaxVertices - 1), kMaxOccupation * kResidueMax, kU64Max));
+static_assert(fits(u128(kMaxOrder + 1) * kMaxVertices, kResidueMax * kResidueMax, kU128Max));
+static_assert(fits(kMaxSectorStates, kResidueMax * kResidueMax, kU128Max));
+static_assert(fits(u128(kFoldStates) * 2 * (kMaxOrder + 1) + 1, kMaxOccupation * kResidueMax * kResidueMax,
+                   kU128Max));
+
 // A perturbative vector series: v[k] holds [t * L + l] over the first len[k]
 // states (times `width` columns for the effective-Hamiltonian chains).
 struct Chain {
@@ -227,7 +253,7 @@ private:
           }
         }
       }
-      if ((s & 1023u) == 1023u) fold();
+      if ((s + 1) % kFoldStates == 0) fold();
     }
     fold();
     Vec series((ng_ + 1) * L);
@@ -418,6 +444,7 @@ ClusterPlan plan_cluster(ClusterInput in) {
   const int nv = in.nv, ng = in.ng, nc = in.nc;
   if (nv < 1 || nv > kMaxVertices) throw std::invalid_argument("cluster size out of range");
   if (ng < 1 || nc < 0 || nc > ng) throw std::invalid_argument("bad series orders");
+  if (ng > kMaxOrder) throw std::invalid_argument("series order exceeds kMaxOrder");
   for (const auto& p : in.patterns) {
     if (p.size() != in.edges.size()) throw std::invalid_argument("pattern does not match edges");
   }
@@ -445,6 +472,9 @@ ClusterPlan plan_cluster(ClusterInput in) {
   plan.mott = build_sector(nv, in.edges, {mott}, dmax, false);
   plan.particle = build_sector(nv, in.edges, doublons, ng / 2, true);
   plan.hole = build_sector(nv, in.edges, holons, ng / 2, true);
+  for (const Sector* sec : {&plan.mott, &plan.particle, &plan.hole}) {
+    if (sec->size() > kMaxSectorStates) throw std::length_error("sector exceeds kMaxSectorStates");
+  }
 
   const Sector& S = plan.mott;
   const std::uint32_t nstates = S.len((ng + plan.diameter) / 2);
@@ -456,7 +486,7 @@ ClusterPlan plan_cluster(ClusterInput in) {
       const int n = occ(st, from);
       if (!n) continue;
       for (int to = 0; to < nv; ++to) {
-        if (to == from || occ(st, to) == 15) continue;
+        if (to == from || occ(st, to) == kMaxOccupation) continue;
         auto it = S.index.find(st - site_unit(from) + site_unit(to));
         if (it == S.index.end()) continue;
         const int u = std::min(from, to), w = std::max(from, to);
