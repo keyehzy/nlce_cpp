@@ -8,7 +8,9 @@ For each series_s{N}_v{tag}.json in SRC writes, into DST,
     chi_site_tri_s{N}_v{tag}.pkl   chi               (series/nlce_chi.py run_chi)
     m0_site_tri_s{N}_v{tag}.pkl    m0                (series/nlce_chi.py run_m0)
 
-with the same keys, values and dictionary order as the Python drivers.
+with the same keys, values and dictionary order as the Python drivers.  The
+chain and square lattice give res_site_{chain,square}_... and sq_site_..._
+files in the same format, without chi and m0.
 
 Usage: to_pickles.py SRC [DST]
 """
@@ -30,25 +32,32 @@ def coefficient(x):
     return ZERO if f == 0 else f
 
 
+LATTICE_TAGS = {"triangular": "tri", "square": "square", "chain": "chain"}
+
+
 def convert(path, dst, quiet=False):
     d = json.loads(path.read_text())
-    n, ng, nc = d["nsites"], d["order_gap"], d["order_chi"]
+    lattice = d.get("lattice", "triangular")
+    n, ng = d["nsites"], d["order_gap"]
     v = Fraction(d["v"])
     tag = path.stem.split("_v", 1)[1]
     disp = [tuple(cd) for cd in d["displacements"]]
     series = lambda xs: [coefficient(x) for x in xs]
 
-    res = {"order": ng, "nsites": n, "reliable_order": n - 1, "v": v, "lattice": "triangular",
+    res = {"order": ng, "nsites": n, "reliable_order": n - 1, "v": v, "lattice": lattice,
            "EN": series(d["EN"]),
            "Hp": {cd: series(xs) for cd, xs in zip(disp, d["Hp"])},
            "Hh": {cd: series(xs) for cd, xs in zip(disp, d["Hh"])}}
     sq = {"order": ng, "nsites": n, "reliable_order": n - 1, "v": v,
           "S": {cd: series(xs) for cd, xs in zip(disp, d["S"]) if cd != (0, 0)}}
-    chi = {"order": nc, "nsites": n, "reliable_order": n - 2, "v": v, "chi": series(d["chi"])}
-    m0 = {"order": nc, "nsites": n, "reliable_order": n - 2, "v": v, "m0": series(d["m0"])}
+    outputs = [("res", res), ("sq", sq)]
+    if "chi" in d:
+        nc = d["order_chi"]
+        outputs.append(("chi", {"order": nc, "nsites": n, "reliable_order": n - 2, "v": v, "chi": series(d["chi"])}))
+        outputs.append(("m0", {"order": nc, "nsites": n, "reliable_order": n - 2, "v": v, "m0": series(d["m0"])}))
 
-    for prefix, obj in (("res", res), ("sq", sq), ("chi", chi), ("m0", m0)):
-        out = dst / ("%s_site_tri_s%d_v%s.pkl" % (prefix, n, tag))
+    for prefix, obj in outputs:
+        out = dst / ("%s_site_%s_s%d_v%s.pkl" % (prefix, LATTICE_TAGS[lattice], n, tag))
         with out.open("wb") as f:
             pickle.dump(obj, f, protocol=4)
         if not quiet:

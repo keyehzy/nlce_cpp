@@ -61,11 +61,13 @@ Pattern canonical_pattern(const ClassInfo& cls, const Pattern& signs) {
   return best;
 }
 
-Geometry build_geometry(int smax) {
+Geometry build_geometry(const Lattice& lat, int smax) {
   Geometry geo;
+  geo.lattice = &lat;
   geo.smax = smax;
   geo.cluster_counts.assign(smax + 1, 0);
-  const auto reps = enumerate_site_clusters(smax);
+  const auto reps = enumerate_site_clusters(lat, smax);
+  const std::int64_t order = static_cast<std::int64_t>(lat.group.size());
   std::map<Site, int> disp_index;
   std::vector<std::map<std::tuple<int, int, int>, std::int64_t>> emb(0);
 
@@ -73,7 +75,7 @@ Geometry build_geometry(int smax) {
     geo.cluster_counts[s] = static_cast<int>(reps[s].size());
     for (const auto& sites : reps[s]) {
       const int n = static_cast<int>(sites.size());
-      const auto bonds = induced_bonds(sites);
+      const auto bonds = induced_bonds(lat, sites);
       std::vector<Edge> edges;
       edges.reserve(bonds.size());
       auto pos = [&](Site x) {
@@ -89,19 +91,20 @@ Geometry build_geometry(int smax) {
       }
       const int c = it->second;
       ClassInfo& cls = geo.classes[c];
-      const int orbit = site_orbit_size(sites);
+      const int orbit = site_orbit_size(lat, sites);
       cls.mult += orbit;
 
       for (int u = 0; u < n; ++u) {
         for (int w = 0; w < n; ++w) {
           const Site d = sites[w] - sites[u];
-          const Site cd = canonical_displacement(d);
+          const Site cd = canonical_displacement(lat, d);
           auto [dit, fresh] = disp_index.try_emplace(cd, static_cast<int>(geo.displacements.size()));
           if (fresh) geo.displacements.push_back(cd);
           emb[c][{dit->second, canon.perm[u], canon.perm[w]}] +=
-              static_cast<std::int64_t>(orbit) * 12 / displacement_orbit_size(d);
+              static_cast<std::int64_t>(orbit) * order / displacement_orbit_size(lat, d);
         }
       }
+      if (!lat.currents) continue;
 
       Pattern signs(cls.edges.size());
       for (const auto& [p, q] : bonds) {
@@ -124,9 +127,9 @@ Geometry build_geometry(int smax) {
   }
 
   for (std::size_t c = 0; c < geo.classes.size(); ++c) {
-    for (const auto& [k, fac12] : emb[c]) {
+    for (const auto& [k, fac] : emb[c]) {
       auto [cd, a, b] = k;
-      geo.classes[c].embeddings.push_back({cd, a, b, fac12});
+      geo.classes[c].embeddings.push_back({cd, a, b, fac});
     }
   }
   return geo;

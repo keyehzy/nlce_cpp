@@ -1,9 +1,9 @@
-// Site-cluster geometry of the triangular lattice, independent of V/U.
+// Site-cluster geometry of a lattice, independent of V/U.
 //
 // A class is a graph-isomorphism class of connected induced site clusters; a
 // key is a class together with the canonical staggered-current pattern on its
 // edges.  The gap, S(q) and energy are assembled from classes, chi and m0
-// from keys.
+// from keys.  Lattices without the staggered current have no keys.
 #pragma once
 
 #include "graph.hpp"
@@ -22,7 +22,7 @@ using Pattern = std::vector<std::int8_t>;  // one sign per canonical edge
 struct Embedding {
   int cd;              // index into Geometry::displacements
   int a, b;            // canonical vertex indices
-  std::int64_t fac12;  // embedding weight per lattice site, times 12
+  std::int64_t fac;    // embedding weight per lattice site, times the point-group order
 };
 
 struct ClassInfo {
@@ -44,6 +44,7 @@ struct KeyInfo {
 };
 
 struct Geometry {
+  const Lattice* lattice = nullptr;
   int smax = 0;
   std::vector<int> cluster_counts;  // [s], lattice clusters modulo symmetry
   std::vector<ClassInfo> classes;
@@ -55,7 +56,7 @@ struct Geometry {
   int key_index(int cls, const Pattern& pattern) const;
 };
 
-Geometry build_geometry(int smax);
+Geometry build_geometry(const Lattice& lat, int smax);
 
 // Lexicographically smallest image of `signs` (one per class edge, oriented
 // i < j) over the class automorphisms and a global sign flip.

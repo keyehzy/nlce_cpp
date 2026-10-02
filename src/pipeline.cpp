@@ -355,11 +355,11 @@ private:
     for (int l = 0; l < blk.count; ++l) {
       const Modulus& m = blk.mod[l];
       u64* tot = &totals[(g0 + l) * width];
-      const u64 inv12 = m.inv(12);
+      const u64 inv_order = m.inv(m.from_int(static_cast<i64>(geo_.lattice->group.size())));
       const u64 mult = m.from_int(cls.mult);
       for (int k = k0; k <= ng_; ++k) tot[layout_.en() + k] = m.add(tot[layout_.en() + k], m.mul(mult, raw.E[k * L + l]));
       for (const Embedding& e : cls.embeddings) {
-        const u64 f = m.mul(m.from_int(e.fac12), inv12);
+        const u64 f = m.mul(m.from_int(e.fac), inv_order);
         const std::size_t off = static_cast<std::size_t>(e.cd) * (ng_ + 1);
         for (int k = k0; k <= ng_; ++k) {
           u64& hp = tot[layout_.hp() + off + k];

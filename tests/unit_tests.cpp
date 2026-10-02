@@ -127,7 +127,7 @@ void test_geometry() {
   const int clusters[] = {0, 1, 1, 3, 7, 22, 82, 333, 1448, 6572};
   const int classes[] = {0, 1, 1, 2, 4, 8, 22, 54, 156, 457};
   const int keys[] = {0, 1, 1, 3, 6, 17, 53, 178, 633, 2385};
-  const Geometry geo = build_geometry(9);
+  const Geometry geo = build_geometry(triangular_lattice(), 9);
   for (int s = 1; s <= 9; ++s) {
     int nc = 0, nk = 0;
     for (const auto& c : geo.classes) nc += c.nv == s;
@@ -145,10 +145,44 @@ void test_geometry() {
   check(pairs == 11, "3-site embeddings per site");
 }
 
+// Chain and square lattice: clusters modulo symmetry (free polyominoes on the
+// square lattice, OEIS A000105) and embeddings per site (fixed polyominoes,
+// A001168).  Neither lattice carries the staggered current.
+void test_bipartite_geometry() {
+  const Geometry chain = build_geometry(chain_lattice(), 8);
+  for (int s = 1; s <= 8; ++s) {
+    std::int64_t mult = 0;
+    for (const auto& c : chain.classes) mult += c.nv == s ? c.mult : 0;
+    check(chain.cluster_counts[s] == 1 && mult == 1, "chain clusters s=" + std::to_string(s));
+  }
+  check(chain.classes.size() == 8 && chain.keys.empty(), "chain classes and keys");
+  check(chain.displacements.size() == 8, "chain displacements");
+
+  const int free[] = {0, 1, 1, 2, 5, 12, 35, 108, 369};
+  const std::int64_t fixed[] = {0, 1, 2, 6, 19, 63, 216, 760, 2725};
+  const Geometry square = build_geometry(square_lattice(), 8);
+  for (int s = 1; s <= 8; ++s) {
+    std::int64_t mult = 0;
+    for (const auto& c : square.classes) mult += c.nv == s ? c.mult : 0;
+    check(square.cluster_counts[s] == free[s], "square clusters s=" + std::to_string(s));
+    check(mult == fixed[s], "square embeddings per site s=" + std::to_string(s));
+  }
+  check(square.keys.empty(), "square keys");
+  // Summed over every displacement of its orbit, each class contributes all
+  // nv^2 site pairs of each of its embeddings.
+  for (const auto& c : square.classes) {
+    std::int64_t pairs = 0;
+    for (const auto& e : c.embeddings) {
+      pairs += e.fac * displacement_orbit_size(square_lattice(), square.displacements[e.cd]);
+    }
+    check(pairs == c.mult * c.nv * c.nv * 8, "square embedding weights");
+  }
+}
+
 // A small full run must satisfy the exact cumulant cancellation in every lane;
 // run_pass throws otherwise.
 void test_small_pass() {
-  const Geometry geo = build_geometry(5);
+  const Geometry geo = build_geometry(triangular_lattice(), 5);
   std::vector<LaneSpec> lanes;
   for (u64 p : moduli(3)) {
     lanes.push_back({{0, 1}, p});
@@ -170,7 +204,7 @@ void test_small_pass() {
 // The largest classes computed with at most two bosons per site must give the
 // lattice series of the full model exactly.
 void test_occupation_cap() {
-  const Geometry geo = build_geometry(6);
+  const Geometry geo = build_geometry(triangular_lattice(), 6);
   std::vector<LaneSpec> lanes;
   for (u64 p : moduli(2)) {
     lanes.push_back({{0, 1}, p});
@@ -205,6 +239,7 @@ int main() {
   test_canonical_form();
   test_double_cover_matching();
   test_geometry();
+  test_bipartite_geometry();
   test_small_pass();
   test_occupation_cap();
   test_limits();

@@ -64,6 +64,29 @@ if(Python3_Interpreter_FOUND)
       --binary $<TARGET_FILE:nlce_run> --nsites 7 --ref ${NLCE_REF_DIR})
   set_tests_properties(regression PROPERTIES SKIP_RETURN_CODE 77)
 
+  # Gap and S(q=0) against the published V/U = 0 series of Elstner and
+  # Monien (cond-mat/9905367, Tables I-III): small sizes under ctest, and the
+  # paper's full x^13 for the chain plus the larger 2D prefixes as the
+  # `validate_paper` target.
+  foreach(case IN ITEMS chain:10 square:8 triangular:7)
+    string(REPLACE ":" ";" parts ${case})
+    list(GET parts 0 lattice)
+    list(GET parts 1 nsites)
+    add_test(NAME paper_${lattice}
+      COMMAND Python3::Interpreter ${CMAKE_SOURCE_DIR}/tools/paper_check.py
+        --binary $<TARGET_FILE:nlce_run> --lattice ${lattice} --nsites ${nsites})
+  endforeach()
+  add_custom_target(validate_paper
+    COMMAND Python3::Interpreter ${CMAKE_SOURCE_DIR}/tools/paper_check.py
+      --binary $<TARGET_FILE:nlce_run> --lattice chain --nsites 14
+    COMMAND Python3::Interpreter ${CMAKE_SOURCE_DIR}/tools/paper_check.py
+      --binary $<TARGET_FILE:nlce_run> --lattice square --nsites 11
+    COMMAND Python3::Interpreter ${CMAKE_SOURCE_DIR}/tools/paper_check.py
+      --binary $<TARGET_FILE:nlce_run> --lattice triangular --nsites 10
+    DEPENDS nlce_run
+    USES_TERMINAL
+    COMMENT "Chain s = 14, square s = 11, triangular s = 10 against cond-mat/9905367")
+
   set(NLCE_VALIDATE_DIR "${CMAKE_BINARY_DIR}/validate_s9")
   add_custom_target(validate
     COMMAND $<TARGET_FILE:nlce_run> run --nsites 9 --out ${NLCE_VALIDATE_DIR}

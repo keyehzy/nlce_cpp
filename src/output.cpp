@@ -17,15 +17,21 @@ void json_list(std::ostream& os, const std::vector<std::string>& v, std::size_t 
 
 }  // namespace
 
-void write_lattice_json(std::ostream& os, int nsites, int ng, int nc, const std::vector<Site>& displacements,
-                        const LatticeSeries& series, int check_primes) {
+void write_lattice_json(std::ostream& os, const Lattice& lattice, int nsites, int ng, int nc,
+                        const std::vector<Site>& displacements, const LatticeSeries& series, int check_primes) {
   const Reconstruction& rec = series.rec;
   const SeriesLayout lay{ng, nc, static_cast<int>(displacements.size())};
-  os << "{\n\"nsites\": " << nsites << ",\n\"v\": \"" << to_string(series.v) << "\",\n\"order_gap\": " << ng
-     << ",\n\"order_chi\": " << nc << ",\n\"primes\": " << series.primes << ",\n\"check_primes\": " << check_primes
+  os << "{\n\"lattice\": \"" << lattice.name << "\",\n\"nsites\": " << nsites << ",\n\"v\": \""
+     << to_string(series.v) << "\",\n\"order_gap\": " << ng;
+  if (lattice.currents) os << ",\n\"order_chi\": " << nc;
+  os << ",\n\"primes\": " << series.primes << ",\n\"check_primes\": " << check_primes
      << ",\n\"max_bits\": " << rec.max_bits << ",\n\"displacements\": [";
   for (std::size_t d = 0; d < displacements.size(); ++d) {
     os << (d ? "," : "") << '[' << displacements[d].a << ',' << displacements[d].b << ']';
+  }
+  os << "],\n\"orbit_sizes\": [";
+  for (std::size_t d = 0; d < displacements.size(); ++d) {
+    os << (d ? "," : "") << displacement_orbit_size(lattice, displacements[d]);
   }
   os << "],\n\"EN\": ";
   json_list(os, rec.values, lay.en(), ng + 1);
@@ -37,10 +43,12 @@ void write_lattice_json(std::ostream& os, int nsites, int ng, int nc, const std:
     }
     os << ']';
   }
-  os << ",\n\"chi\": ";
-  json_list(os, rec.values, lay.chi(), nc + 1);
-  os << ",\n\"m0\": ";
-  json_list(os, rec.values, lay.m0(), nc + 1);
+  if (lattice.currents) {
+    os << ",\n\"chi\": ";
+    json_list(os, rec.values, lay.chi(), nc + 1);
+    os << ",\n\"m0\": ";
+    json_list(os, rec.values, lay.m0(), nc + 1);
+  }
   os << "\n}\n";
 }
 

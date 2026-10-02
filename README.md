@@ -5,6 +5,8 @@ C++20 implementation of the site-cluster linked-cluster expansion in
 the one-body structure factor S(q), the chiral susceptibility chi_kappa and the
 equal-time moment m0 of the frustrated triangular-lattice extended
 Bose-Hubbard model at unit filling, as exact rational series in x = t/U.
+The same expansion runs on the chain and the square lattice (Delta, S and the
+energy; chi and m0 need the triangular staggered current).
 
 ## Build
 
@@ -13,16 +15,21 @@ Requires CMake >= 3.24, a C++20 compiler, FLINT 3, GMP and Boost headers
 
     cmake -S . -B build -G Ninja
     cmake --build build
-    ctest --test-dir build                   # unit tests + s = 7 regression
+    ctest --test-dir build                   # unit tests, s = 7 regression, paper checks
     cmake --build build --target validate    # full s = 9 run vs validate/
+    cmake --build build --target validate_paper   # vs Elstner and Monien, below
 
 ## Run
 
     ./build/nlce_run run --nsites 10 --out out_s10            # all six V/U
     ./build/nlce_run run --nsites 10 --v 1/5 --threads 8 --out out
     python3 tools/to_pickles.py out_s10 out_s10/pkl            # series/*.pkl format
+    ./build/nlce_run run --lattice square --nsites 11 --v 0 --out out_sq
 
-`--nsites s` gives Delta and S through x^(s-1), chi and m0 through x^(s-2).
+`--lattice` is `triangular` (default), `square` or `chain`.  The hopping enters
+as +t (frustrated on the triangular lattice), so the usual -t model follows by
+x -> -x.  `--nsites s` gives Delta and S through x^(s-1), chi and m0 through
+x^(s-2).
 `nlce_run geometry --nsites s` prints cluster, class and key counts;
 `nlce_run bench` times one cluster (see the header of `src/main.cpp`).
 
@@ -33,7 +40,7 @@ s = 9 and 6 minutes at s = 10 (1.4 GB peak), reproducing the HPC pickles in
 ## Method
 
 * **Geometry** (`lattice`, `graph`, `geometry`): connected site clusters modulo
-  translation and D6, grouped into graph-isomorphism classes by an
+  translation and the point group (D6, D4, or inversion on the chain), grouped into graph-isomorphism classes by an
   individualisation-refinement canonical form; current patterns are
   canonicalised over automorphisms and a global sign.
 * **Exact arithmetic by multiple primes** (`modp`, `reconstruct`): every step —
@@ -84,3 +91,32 @@ references elsewhere.
 reference code, which it expects in `../series` (pt.py, chi.py, neutral.py):
 
     python3 tools/check_cluster.py --smax 6 --ng 7 --nc 6
+
+## Verification against Elstner and Monien
+
+N. Elstner and H. Monien, cond-mat/9905367, Tables I-III, list Delta(q=0) and
+S(q=0) at V/U = 0 through x^13 for the square lattice, the triangular lattice
+and the chain (in the -t convention; Appendix A adds the chain's energy through
+x^6).  `tools/paper_check.py` holds those tables, runs `nlce_run` and compares
+exactly; the `paper_*` ctests do so at small sizes and `validate_paper` at
+
+| lattice    | s  | orders    | time   | peak   |
+|------------|----|-----------|--------|--------|
+| chain      | 14 | x^0..x^13 | 10 s   | 1.9 GB |
+| square     | 11 | x^0..x^10 | 25 s   | 1.3 GB |
+| triangular | 10 | x^0..x^9  | 25 s   | 1.1 GB |
+
+Larger runs reach further: the square lattice at s = 12 (x^11, 2.5 min,
+4.1 GB) and s = 13 (x^12, 46 min with 4 threads, 5 GB), the triangular
+lattice at s = 11 (x^10, 5.4 min, 1.8 GB):
+
+    python3 tools/paper_check.py --lattice square --nsites 12
+
+Every coefficient reached agrees exactly, except where the paper itself is
+not exact.  The chain's S at x^10 is printed as 22598877209/4375 where the
+expansion, and an independent brute-force Rayleigh-Schroedinger calculation on
+a 12-site ring, give 22598877209/4374.  The square lattice's x^12 entries are
+printed as fractions but are rounded: each numerator equals our exact
+coefficient times the printed denominator, rounded to an integer (agreement
+to 30 digits).  Entries printed with decimals (triangular x^11 on, square S
+at x^13) are compared to a relative 1e-12.
