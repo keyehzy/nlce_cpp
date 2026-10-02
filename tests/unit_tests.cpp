@@ -110,6 +110,16 @@ void test_canonical_form() {
   check(automorphisms(6, {{0, 1}, {1, 2}, {2, 3}, {3, 4}, {4, 5}, {0, 5}}).size() == 12, "hexagon automorphisms");
 }
 
+void test_double_cover_matching() {
+  check(double_cover_matching(1, {}) == 0, "single vertex");
+  check(double_cover_matching(2, {{0, 1}}) == 2, "edge");
+  check(double_cover_matching(3, {{0, 1}, {1, 2}}) == 2, "path P3");
+  check(double_cover_matching(3, {{0, 1}, {1, 2}, {0, 2}}) == 3, "triangle");
+  check(double_cover_matching(4, {{0, 1}, {0, 2}, {0, 3}}) == 2, "star K1,3");
+  check(double_cover_matching(5, {{0, 1}, {1, 2}, {2, 0}, {2, 3}, {3, 4}}) == 5, "triangle with a tail of two");
+  check(double_cover_matching(5, {{0, 1}, {1, 2}, {2, 3}, {3, 4}}) == 4, "path P5");
+}
+
 // Reference counts from the Python implementation (series/nlce.py,
 // series/nlce_chi.py): lattice clusters, isomorphism classes and decorated
 // keys per size.
@@ -157,6 +167,25 @@ void test_small_pass() {
   check(ok, "cumulant cancellation, s<=5");
 }
 
+// The largest classes computed with at most two bosons per site must give the
+// lattice series of the full model exactly.
+void test_occupation_cap() {
+  const Geometry geo = build_geometry(6);
+  std::vector<LaneSpec> lanes;
+  for (u64 p : moduli(2)) {
+    lanes.push_back({{0, 1}, p});
+    lanes.push_back({{1, 5}, p});
+    lanes.push_back({{3, 20}, p});
+  }
+  PassOptions opts;
+  opts.threads = 2;
+  opts.verbose = false;
+  const auto capped = run_pass(geo, 5, 4, lanes, opts);
+  opts.cap_largest = false;
+  const auto full = run_pass(geo, 5, 4, lanes, opts);
+  check(capped == full, "occupation-capped largest classes, s<=6");
+}
+
 // Inputs beyond the overflow budget must be rejected, not computed wrongly.
 void test_limits() {
   bool threw = false;
@@ -174,8 +203,10 @@ int main() {
   test_modulus();
   test_rational();
   test_canonical_form();
+  test_double_cover_matching();
   test_geometry();
   test_small_pass();
+  test_occupation_cap();
   test_limits();
   if (failures) {
     std::fprintf(stderr, "%d failure(s)\n", failures);

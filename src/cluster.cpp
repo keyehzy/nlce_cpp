@@ -469,9 +469,10 @@ ClusterPlan plan_cluster(ClusterInput in) {
     doublons.push_back(mott + site_unit(j));
     holons.push_back(mott - site_unit(j));
   }
-  plan.mott = build_sector(nv, in.edges, {mott}, dmax, false);
-  plan.particle = build_sector(nv, in.edges, doublons, ng / 2, true);
-  plan.hole = build_sector(nv, in.edges, holons, ng / 2, true);
+  const int cap = in.max_occupation;
+  plan.mott = build_sector(nv, in.edges, {mott}, dmax, false, cap);
+  plan.particle = build_sector(nv, in.edges, doublons, ng / 2, true, cap);
+  plan.hole = build_sector(nv, in.edges, holons, ng / 2, true, cap);
   for (const Sector* sec : {&plan.mott, &plan.particle, &plan.hole}) {
     if (sec->size() > kMaxSectorStates) throw std::length_error("sector exceeds kMaxSectorStates");
   }

@@ -19,16 +19,18 @@ namespace {
 constexpr int L = kLanes;
 
 // Cumulant orders k0..order of one class or key, for every lane of the pass:
-// data[(row * nk + k - k0) * nlanes + lane].
+// data[(row * nk + k - k0) * nlanes + lane].  Empty when k0 > order, and
+// before reset.
 class Weights {
 public:
   void reset(int rows, int k0, int order, std::size_t nlanes) {
     k0_ = k0;
-    nk_ = order - k0 + 1;
+    nk_ = std::max(0, order - k0 + 1);
     nlanes_ = nlanes;
     data_.assign(static_cast<std::size_t>(rows) * nk_ * nlanes, 0);
   }
   int k0() const { return k0_; }
+  int end() const { return k0_ + nk_; }
   u64* at(int row, int k, std::size_t lane) { return data_.data() + offset(row, k, lane); }
   const u64* at(int row, int k, std::size_t lane) const { return data_.data() + offset(row, k, lane); }
 
@@ -57,14 +59,70 @@ struct ClassRows {
 // Rows of a key's weights.
 enum KeyRow { kChiRow = 0, kM0Row = 1, kKeyRows = 2 };
 
+// LEADING ORDERS.  A perturbative term depends only on the sites its hops
+// touch, since an untouched site keeps n = 1 and enters neither U nor V, so at
+// every order the cumulant of an s-site class collects exactly the terms that
+// touch all s sites.  Add to a term's hops its operator insertions (the
+// b^dag_u b_w of corr, the two currents of chi and m0) and, for Hp and Hh, one
+// arc closing the displacement from seed j to seed i.  The resulting
+// multigraph has equal in- and out-degree at every site, and every site
+// receives an arc.  Choose one incoming arc per site: these s arcs have at
+// most m distinct tails, m = ClassInfo::matching, since one arc per tail is a
+// matching of the bipartite double cover; and every site sends at least as
+// many arcs as it receives, so there are at least 2s - m arcs.  The closing
+// arc or the b^dag b insertion need not be a cluster edge, and raises m by at
+// most one, to at most s.  The cumulants therefore vanish below these orders,
+// which check_vanishing verifies exactly in every lane.
+struct LeadingOrders {
+  int energy;   // E
+  int pair;     // Hp, Hh, corr
+  int current;  // chi, m0
+};
+
+LeadingOrders leading_orders(const ClassInfo& cls) {
+  const int s = cls.nv, m = cls.matching;
+  return {2 * s - m, std::max(s - 1, 2 * s - 2 - m), 2 * s - 2 - m};
+}
+
+// OCCUPATION CAP.  In the same picture, a term of order k <= ng has at most
+// k + 1 arcs (k + 2 <= nc + 2 for chi and m0), and each of the s sites
+// receives at least one, so none receives more than A - s + 1, where
+// A = max(ng + 1, nc + 2).  The doublon's seed receives the closing arc, so no
+// occupation ever exceeds A - s + 2.  The terms that touch every site are
+// therefore the same in the model capped at A - s + 2 bosons per site, which
+// is again local, and its cumulants agree with the full model's through ng
+// and nc.  For the largest classes, with ng = smax - 1 and nc = smax - 2, the
+// cap is 2, which removes about three quarters of their Mott and particle
+// states.  Subtraction works order by order, so the subcluster weights must
+// come from the capped model too.  The pass therefore runs two hierarchies:
+// the full model for the smaller classes, and the capped model through every
+// size, of which only the largest classes enter the lattice sums.
+struct Hierarchy {
+  int cap = kMaxOccupation;  // bosons per site
+  int lo = 1;                // smallest class size entering the lattice sums
+  int top = 0;               // largest class size computed
+  std::vector<Weights> class_w;
+  std::vector<Weights> key_w;
+};
+
 class Pass {
 public:
   Pass(const Geometry& geo, int ng, int nc, const std::vector<LaneSpec>& lanes, const PassOptions& opts)
       : geo_(geo), ng_(ng), nc_(nc), lanes_(lanes), opts_(opts), nl_(lanes.size()) {
     layout_ = {ng, nc, static_cast<int>(geo.displacements.size())};
     for (std::size_t b = 0; b < nl_; b += L) blocks_.push_back(make_lane_block(lanes_, b));
-    class_w_.resize(geo.classes.size());
-    key_w_.resize(geo.keys.size());
+    const int top = geo.smax;
+    const int cap = std::clamp(std::max(ng + 1, nc + 2) - top + 2, 2, kMaxOccupation);
+    if (opts.cap_largest && cap < kMaxOccupation) {
+      hier_.push_back({kMaxOccupation, 1, top - 1, {}, {}});
+      hier_.push_back({cap, top, top, {}, {}});
+    } else {
+      hier_.push_back({kMaxOccupation, 1, top, {}, {}});
+    }
+    for (Hierarchy& h : hier_) {
+      h.class_w.resize(geo.classes.size());
+      h.key_w.resize(geo.keys.size());
+    }
   }
 
   std::vector<std::vector<u64>> run() {
@@ -79,6 +137,11 @@ public:
       std::stable_sort(wave.begin(), wave.end(), [&](int x, int y) {
         return geo_.classes[x].edges.size() > geo_.classes[y].edges.size();
       });
+      std::vector<std::pair<Hierarchy*, int>> work;
+      for (Hierarchy& h : hier_) {
+        if (s > h.top) continue;
+        for (int c : wave) work.emplace_back(&h, c);
+      }
       std::atomic<std::size_t> next{0};
       std::exception_ptr error;
       std::mutex error_mutex;
@@ -89,9 +152,9 @@ public:
           pool.emplace_back([&, t] {
             while (!failed) {
               const std::size_t i = next++;
-              if (i >= wave.size()) break;
+              if (i >= work.size()) break;
               try {
-                process(wave[i], totals[t]);
+                process(*work[i].first, work[i].second, totals[t]);
               } catch (...) {
                 std::lock_guard lock(error_mutex);
                 if (!error) error = std::current_exception();
@@ -137,30 +200,33 @@ private:
   const std::size_t nl_;
   SeriesLayout layout_;
   std::vector<LaneBlock> blocks_;
-  std::vector<Weights> class_w_;
-  std::vector<Weights> key_w_;
+  std::vector<Hierarchy> hier_;
 
-  void process(int c, std::vector<u64>& totals) {
+  void process(Hierarchy& h, int c, std::vector<u64>& totals) {
     const ClassInfo& cls = geo_.classes[c];
     const int s = cls.nv;
+    const LeadingOrders lead = leading_orders(cls);
+    // Cumulants that vanish through ng or nc are neither computed nor stored.
+    const bool decorate = lead.current <= nc_;
+    if (lead.pair > ng_ && !decorate) return;
 
-    ClusterInput input{cls.nv, cls.edges, {}, ng_, nc_};
-    for (int key : cls.keys) input.patterns.push_back(geo_.keys[key].pattern);
+    ClusterInput input{cls.nv, cls.edges, {}, ng_, nc_, h.cap};
+    if (decorate) {
+      for (int key : cls.keys) input.patterns.push_back(geo_.keys[key].pattern);
+    }
     const ClusterPlan plan = plan_cluster(std::move(input));
     const std::vector<SubCluster> subs = subclusters(geo_, c);
     // subkeys[q][i]: key of subcluster i under the class's pattern q.
-    std::vector<std::vector<int>> subkeys(cls.keys.size());
-    for (std::size_t q = 0; q < cls.keys.size(); ++q) {
+    std::vector<std::vector<int>> subkeys(decorate ? cls.keys.size() : 0);
+    for (std::size_t q = 0; q < subkeys.size(); ++q) {
       for (const auto& sub : subs) subkeys[q].push_back(subcluster_key(geo_, c, sub, geo_.keys[cls.keys[q]].pattern));
     }
 
-    const int k0 = s - 1;
-    const int k0c = std::max(0, s - 2);
-    // Clusters of the largest size are never subtracted from anything.
-    const bool keep = s < geo_.smax;
+    // Clusters of the top size are never subtracted from anything.
+    const bool keep = s < h.top;
     if (keep) {
-      class_w_[c].reset(ClassRows{s * s}.count(), k0, ng_, nl_);
-      for (int key : cls.keys) key_w_[key].reset(kKeyRows, k0c, nc_, nl_);
+      h.class_w[c].reset(ClassRows{s * s}.count(), lead.pair, ng_, nl_);
+      for (int key : cls.keys) h.key_w[key].reset(kKeyRows, lead.current, nc_, nl_);
     }
 
     RawSeries raw;
@@ -169,10 +235,10 @@ private:
       const std::size_t g0 = b * L;
       compute_block(plan, blk, raw);
       remove_seed_energy(blk, raw);
-      subtract_subclusters(blk, g0, cls, subs, subkeys, raw);
-      check_vanishing(blk, raw, c, k0, k0c);
-      if (keep) store_weights(blk, g0, c, k0, k0c, raw);
-      accumulate(blk, g0, raw, cls, k0, k0c, totals);
+      subtract_subclusters(h, blk, g0, subs, subkeys, raw);
+      check_vanishing(blk, raw, c, lead);
+      if (keep) store_weights(h, blk, g0, c, raw);
+      if (s >= h.lo) accumulate(blk, g0, raw, cls, lead, totals);
     }
   }
 
@@ -188,14 +254,14 @@ private:
 
   // Subtracts the weights of every connected proper induced subcluster, each
   // mapped from its own canonical labels onto the parent's vertices.
-  void subtract_subclusters(const LaneBlock& blk, std::size_t g0, const ClassInfo& cls,
-                            const std::vector<SubCluster>& subs, const std::vector<std::vector<int>>& subkeys,
-                            RawSeries& raw) const {
+  static void subtract_subclusters(const Hierarchy& h, const LaneBlock& blk, std::size_t g0,
+                                   const std::vector<SubCluster>& subs,
+                                   const std::vector<std::vector<int>>& subkeys, RawSeries& raw) {
     for (const auto& sub : subs) {
-      const Weights& w = class_w_[sub.cls];
+      const Weights& w = h.class_w[sub.cls];
       const int nv2 = static_cast<int>(sub.verts.size());
       const ClassRows rows{nv2 * nv2};
-      for (int k = w.k0(); k <= ng_; ++k) {
+      for (int k = w.k0(); k < w.end(); ++k) {
         subtract(blk, &raw.E[k * L], w.at(ClassRows::E, k, g0));
         for (int x = 0; x < nv2; ++x) {
           for (int y = 0; y < nv2; ++y) {
@@ -208,11 +274,11 @@ private:
         }
       }
     }
-    for (std::size_t q = 0; q < cls.keys.size(); ++q) {
+    for (std::size_t q = 0; q < subkeys.size(); ++q) {
       const int pat = static_cast<int>(q);
       for (std::size_t i = 0; i < subs.size(); ++i) {
-        const Weights& w = key_w_[subkeys[q][i]];
-        for (int k = w.k0(); k <= nc_; ++k) {
+        const Weights& w = h.key_w[subkeys[q][i]];
+        for (int k = w.k0(); k < w.end(); ++k) {
           subtract(blk, &raw.chi[raw.pattern_at(pat, k)], w.at(kChiRow, k, g0));
           subtract(blk, &raw.m0[raw.pattern_at(pat, k)], w.at(kM0Row, k, g0));
         }
@@ -221,12 +287,12 @@ private:
   }
 
   // Keeps the non-vanishing orders of the cumulants for larger clusters.
-  void store_weights(const LaneBlock& blk, std::size_t g0, int c, int k0, int k0c, const RawSeries& raw) {
+  void store_weights(Hierarchy& h, const LaneBlock& blk, std::size_t g0, int c, const RawSeries& raw) const {
     const ClassInfo& cls = geo_.classes[c];
     const int nv = cls.nv;
     const ClassRows rows{nv * nv};
-    Weights& cw = class_w_[c];
-    for (int k = k0; k <= ng_; ++k) {
+    Weights& cw = h.class_w[c];
+    for (int k = cw.k0(); k < cw.end(); ++k) {
       store(blk, &raw.E[k * L], cw.at(ClassRows::E, k, g0));
       for (int u = 0; u < nv; ++u) {
         for (int v = 0; v < nv; ++v) {
@@ -239,8 +305,8 @@ private:
     }
     for (std::size_t q = 0; q < cls.keys.size(); ++q) {
       const int pat = static_cast<int>(q);
-      Weights& kw = key_w_[cls.keys[q]];
-      for (int k = k0c; k <= nc_; ++k) {
+      Weights& kw = h.key_w[cls.keys[q]];
+      for (int k = kw.k0(); k < kw.end(); ++k) {
         store(blk, &raw.chi[raw.pattern_at(pat, k)], kw.at(kChiRow, k, g0));
         store(blk, &raw.m0[raw.pattern_at(pat, k)], kw.at(kM0Row, k, g0));
       }
@@ -253,7 +319,7 @@ private:
 
   static void store(const LaneBlock& blk, const u64* src, u64* dst) { std::copy_n(src, blk.count, dst); }
 
-  void check_vanishing(const LaneBlock& blk, const RawSeries& raw, int c, int k0, int k0c) const {
+  void check_vanishing(const LaneBlock& blk, const RawSeries& raw, int c, const LeadingOrders& lead) const {
     const int nv = raw.nv;
     auto zero = [&](const u64* x) {
       for (int l = 0; l < blk.count; ++l) {
@@ -262,8 +328,8 @@ private:
       return true;
     };
     bool ok = true;
-    for (int k = 0; k < k0 && ok; ++k) {
-      ok = zero(&raw.E[k * L]);
+    for (int k = 0; k < std::min(lead.energy, ng_ + 1) && ok; ++k) ok = zero(&raw.E[k * L]);
+    for (int k = 0; k < std::min(lead.pair, ng_ + 1) && ok; ++k) {
       for (int u = 0; u < nv && ok; ++u) {
         for (int v = 0; v < nv && ok; ++v) {
           ok = zero(&raw.Hp[raw.pair_at(u, v, k)]) && zero(&raw.Hh[raw.pair_at(u, v, k)]) &&
@@ -272,7 +338,9 @@ private:
       }
     }
     for (int q = 0; q < raw.npat && ok; ++q) {
-      for (int k = 0; k < k0c && ok; ++k) ok = zero(&raw.chi[raw.pattern_at(q, k)]) && zero(&raw.m0[raw.pattern_at(q, k)]);
+      for (int k = 0; k < std::min(lead.current, nc_ + 1) && ok; ++k) {
+        ok = zero(&raw.chi[raw.pattern_at(q, k)]) && zero(&raw.m0[raw.pattern_at(q, k)]);
+      }
     }
     if (!ok) {
       throw std::logic_error("cluster cumulant does not vanish below its leading order (class " + std::to_string(c) +
@@ -280,8 +348,9 @@ private:
     }
   }
 
-  void accumulate(const LaneBlock& blk, std::size_t g0, const RawSeries& raw, const ClassInfo& cls, int k0, int k0c,
-                  std::vector<u64>& totals) const {
+  void accumulate(const LaneBlock& blk, std::size_t g0, const RawSeries& raw, const ClassInfo& cls,
+                  const LeadingOrders& lead, std::vector<u64>& totals) const {
+    const int k0 = lead.pair, k0c = lead.current;
     const std::size_t width = layout_.size();
     for (int l = 0; l < blk.count; ++l) {
       const Modulus& m = blk.mod[l];
@@ -303,14 +372,14 @@ private:
           }
         }
       }
-      for (std::size_t q = 0; q < cls.keys.size(); ++q) {
+      for (int q = 0; q < raw.npat; ++q) {
         const u64 km = m.from_int(geo_.keys[cls.keys[q]].mult);
         const u64 km2 = m.add(km, km);
         for (int k = k0c; k <= nc_; ++k) {
           u64& ch = tot[layout_.chi() + k];
-          ch = m.add(ch, m.mul(km2, raw.chi[raw.pattern_at(static_cast<int>(q), k) + l]));
+          ch = m.add(ch, m.mul(km2, raw.chi[raw.pattern_at(q, k) + l]));
           u64& mm = tot[layout_.m0() + k];
-          mm = m.add(mm, m.mul(km, raw.m0[raw.pattern_at(static_cast<int>(q), k) + l]));
+          mm = m.add(mm, m.mul(km, raw.m0[raw.pattern_at(q, k) + l]));
         }
       }
     }

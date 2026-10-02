@@ -14,10 +14,11 @@ u64 uniform_state(int nv, int n) {
 }
 
 Sector build_sector(int nv, const std::vector<Edge>& edges, const std::vector<u64>& seeds, int dmax,
-                    bool seed_distances) {
+                    bool seed_distances, int max_occupation) {
   if (nv > kMaxVertices) throw std::invalid_argument("cluster too large for packed states");
   if (edges.size() > std::numeric_limits<std::uint8_t>::max()) throw std::invalid_argument("too many edges");
   if (dmax > std::numeric_limits<std::uint8_t>::max()) throw std::invalid_argument("hop distance too large");
+  if (max_occupation < 1 || max_occupation > kMaxOccupation) throw std::invalid_argument("bad occupation cap");
   Sector sec;
   sec.nv = nv;
   sec.nseeds = static_cast<int>(seeds.size());
@@ -32,6 +33,9 @@ Sector build_sector(int nv, const std::vector<Edge>& edges, const std::vector<u6
     return false;
   };
   for (u64 st : seeds) {
+    for (int i = 0; i < nv; ++i) {
+      if (occ(st, i) > max_occupation) throw std::invalid_argument("seed exceeds the occupation cap");
+    }
     if (!add(st, 0)) throw std::invalid_argument("duplicate seed");
   }
   sec.layer_end.push_back(sec.size());
@@ -43,7 +47,10 @@ Sector build_sector(int nv, const std::vector<Edge>& edges, const std::vector<u6
       for (auto [i, j] : edges) {
         for (auto [from, to] : {std::pair{j, i}, std::pair{i, j}}) {
           if (!occ(st, from)) continue;
-          if (occ(st, to) == kMaxOccupation) throw std::overflow_error("site occupation exceeds packed range");
+          if (occ(st, to) == max_occupation) {
+            if (max_occupation == kMaxOccupation) throw std::overflow_error("site occupation exceeds packed range");
+            continue;
+          }
           add(st - site_unit(from) + site_unit(to), d);
         }
       }

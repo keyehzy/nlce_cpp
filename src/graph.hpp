@@ -45,4 +45,12 @@ std::vector<Edge> edges_from_cert(const Cert& cert);
 // Every vertex permutation preserving the edge set.
 std::vector<std::vector<int>> automorphisms(int n, const std::vector<Edge>& edges);
 
+// Maximum matching of the bipartite double cover (vertex v split into v_out
+// and v_in, each edge uv giving u_out v_in and v_out u_in), i.e. twice the
+// fractional matching number: the largest arc set with in- and out-degree at
+// most one, a disjoint union of directed paths and cycles, an edge traversed
+// both ways counting as a 2-cycle.  It equals n iff the graph has a perfect
+// 2-matching (a spanning union of disjoint edges and cycles).
+int double_cover_matching(int n, const std::vector<Edge>& edges);
+
 }  // namespace nlce

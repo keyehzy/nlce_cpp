@@ -28,6 +28,7 @@ ClassInfo make_class(const Cert& cert) {
     cls.edge_index[j * cls.nv + i] = e;
   }
   cls.autos = automorphisms(cls.nv, cls.edges);
+  cls.matching = double_cover_matching(cls.nv, cls.edges);
   return cls;
 }
 

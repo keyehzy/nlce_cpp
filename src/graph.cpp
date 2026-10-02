@@ -196,4 +196,29 @@ std::vector<std::vector<int>> automorphisms(int n, const std::vector<Edge>& edge
   return out;
 }
 
+int double_cover_matching(int n, const std::vector<Edge>& edges) {
+  const Adjacency adj = adjacency(n, edges);
+  std::array<int, kMaxVertices> owner;  // owner[v] = u when u_out is matched to v_in
+  owner.fill(-1);
+  std::uint32_t visited = 0;
+  std::function<bool(int)> augment = [&](int u) {
+    for (std::uint32_t m = adj[u] & ~visited; m; m &= m - 1) {
+      const int v = __builtin_ctz(m);
+      if (visited >> v & 1u) continue;
+      visited |= 1u << v;
+      if (owner[v] < 0 || augment(owner[v])) {
+        owner[v] = u;
+        return true;
+      }
+    }
+    return false;
+  };
+  int size = 0;
+  for (int u = 0; u < n; ++u) {
+    visited = 0;
+    size += augment(u);
+  }
+  return size;
+}
+
 }  // namespace nlce

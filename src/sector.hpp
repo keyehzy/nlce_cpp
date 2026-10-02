@@ -60,8 +60,11 @@ struct Sector {
 
 // All states within hop distance `dmax` of `seeds`, with incoming moves
 // restricted to that set.  `seed_distances` also records the distance from
-// each individual seed, measured within the set.
+// each individual seed, measured within the set.  `max_occupation` below
+// kMaxOccupation selects the model in which no site holds more bosons: hops
+// into a full site are dropped.  In the full model, reaching kMaxOccupation is
+// an error, since the packing cannot represent more.
 Sector build_sector(int nv, const std::vector<Edge>& edges, const std::vector<u64>& seeds, int dmax,
-                    bool seed_distances);
+                    bool seed_distances, int max_occupation = kMaxOccupation);
 
 }  // namespace nlce

@@ -31,6 +31,7 @@ struct ClassInfo {
   std::vector<Edge> edges;  // canonical, sorted
   std::vector<int> edge_index;  // nv*nv, -1 where no edge
   std::vector<std::vector<int>> autos;
+  int matching = 0;       // double_cover_matching of the class graph
   std::int64_t mult = 0;  // embeddings per lattice site
   std::vector<Embedding> embeddings;  // site-pair embeddings by displacement
   std::vector<int> keys;  // decorated keys of this class

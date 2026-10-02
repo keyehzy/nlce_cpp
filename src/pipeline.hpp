@@ -33,6 +33,7 @@ struct SeriesLayout {
 struct PassOptions {
   int threads = 1;
   bool verbose = true;
+  bool cap_largest = true;  // largest classes in the occupation-capped model (exact; see pipeline.cpp)
 };
 
 // Returns, per lane, the lattice series residues in SeriesLayout order.

@@ -26,8 +26,8 @@ Requires CMake >= 3.24, a C++20 compiler, FLINT 3, GMP and Boost headers
 `nlce_run geometry --nsites s` prints cluster, class and key counts;
 `nlce_run bench` times one cluster (see the header of `src/main.cpp`).
 
-On an Apple M4 (10 cores, 16 GB) the six-V/U set takes about 1 minute at
-s = 9 and 14 minutes at s = 10 (2.1 GB peak), reproducing the HPC pickles in
+On an Apple M4 (10 cores, 16 GB) the six-V/U set takes about 30 seconds at
+s = 9 and 8 minutes at s = 10 (1.5 GB peak), reproducing the HPC pickles in
 `validate/` exactly.
 
 ## Method
@@ -48,8 +48,17 @@ s = 9 and 14 minutes at s = 10 (2.1 GB peak), reproducing the HPC pickles in
   distance, vectors truncated to the distance that can still reach the target
   order (exact pruning), left and right ground-state chains shared by E, S,
   chi and m0, chi from the first-order response only.
-* **Checks**: every cluster cumulant must vanish below x^(s-1) (x^(s-2) for chi,
-  m0); this is verified exactly in every lane.
+* **Leading orders** (`pipeline`): a term touching only some sites of a cluster
+  cancels in its cumulant, so cumulants of an s-site class vanish below
+  2s - m (E), max(s - 1, 2s - 2 - m) (Hp, Hh, S) and 2s - 2 - m (chi, m0),
+  where m is the maximum matching of the cluster's bipartite double cover.
+  Cumulants that vanish through the target order are skipped.
+* **Occupation cap**: at those orders no site ever holds more than two bosons,
+  so the largest clusters (and, for their subtraction, a second hierarchy of
+  smaller ones) are computed in the model capped at two bosons per site,
+  which drops about three quarters of their states.
+* **Checks**: every cluster cumulant must vanish below its leading order; this
+  is verified exactly in every lane.
 
 ## Verification against the Python code
 
@@ -67,8 +76,8 @@ Two checks run from the build directory.  An s-site expansion is exact
 through x^(s-1) (x^(s-2) for chi and m0), so `tools/regression.py`, the
 `regression` ctest, runs s = 7 in under a second and requires its series to
 equal the leading coefficients of the s = 9 references; it is skipped when
-`validate/` is empty.  The `validate` target runs s = 9 in full (about a
-minute) and requires byte-identical pickles.  Set `-DNLCE_REF_DIR=...` to use
+`validate/` is empty.  The `validate` target runs s = 9 in full (about
+half a minute) and requires byte-identical pickles.  Set `-DNLCE_REF_DIR=...` to use
 references elsewhere.
 
 `tools/check_cluster.py` compares per-cluster series against the Python

@@ -44,6 +44,7 @@ struct ClusterInput {
   std::vector<Pattern> patterns;
   int ng = 0;  // order of E, Hp, Hh, corr
   int nc = 0;  // order of chi, m0
+  int max_occupation = kMaxOccupation;  // per-site cap of the model, see build_sector
 };
 
 struct PairMove {
