@@ -2,8 +2,9 @@
 """Check that regenerated series pickles equal a reference set exactly.
 
 Compares every *_site_tri_s{N}_v*.pkl present in NEW against the file of the
-same name in REF (default: ../series), as Python objects (Fraction values,
-dictionary contents).  Also reports whether the files are byte-identical.
+same name in REF (default: validate/, the reference s = 9 and s = 10 series),
+as Python objects (Fraction values, dictionary contents).  Also reports
+whether the files are byte-identical.
 
 Usage: compare_pickles.py NEW [REF]
 """
@@ -16,7 +17,7 @@ from pathlib import Path
 
 def main():
     new = Path(sys.argv[1])
-    ref = Path(sys.argv[2]) if len(sys.argv) > 2 else Path(__file__).resolve().parents[2] / "series"
+    ref = Path(sys.argv[2]) if len(sys.argv) > 2 else Path(__file__).resolve().parents[1] / "validate"
     files = sorted(new.glob("*_site_tri_s*_v*.pkl"))
     if not files:
         sys.exit("no pickles in %s" % new)

@@ -27,7 +27,7 @@ Requires CMake >= 3.24, a C++20 compiler, FLINT 3, GMP and Boost headers
 
 On an Apple M4 (10 cores, 16 GB) the six-V/U set takes about 1 minute at
 s = 9 and 14 minutes at s = 10 (2.1 GB peak), reproducing the HPC pickles in
-`../series` exactly.
+`validate/` exactly.
 
 ## Method
 
@@ -52,5 +52,17 @@ s = 9 and 14 minutes at s = 10 (2.1 GB peak), reproducing the HPC pickles in
 
 ## Verification against the Python code
 
-    python3 tools/check_cluster.py --smax 6 --ng 7 --nc 6     # per-cluster series
-    python3 tools/compare_pickles.py out_s10/pkl ../series      # lattice series
+`validate/` holds the reference series produced by the original Python
+implementation on HPC: the 48 `{res,sq,chi,m0}_site_tri_s{9,10}_v*.pkl` files
+for V/U = 0, 1/20, 1/10, 3/20, 1/5, 1/4.  It is not tracked by git; populate
+it from the Python project with
+
+    mkdir -p validate && cp ../series/*_site_tri_s{9,10}_*.pkl validate/
+
+    python3 tools/to_pickles.py out_s10 out_s10/pkl
+    python3 tools/compare_pickles.py out_s10/pkl                # lattice series vs validate/
+
+`tools/check_cluster.py` compares per-cluster series against the Python
+reference code, which it expects in `../series` (pt.py, chi.py, neutral.py):
+
+    python3 tools/check_cluster.py --smax 6 --ng 7 --nc 6
