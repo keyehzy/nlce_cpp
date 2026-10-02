@@ -1,0 +1,68 @@
+#include "output.hpp"
+
+#include "pipeline.hpp"
+
+#include <string>
+#include <utility>
+
+namespace nlce {
+
+namespace {
+
+void json_list(std::ostream& os, const std::vector<std::string>& v, std::size_t begin, std::size_t n) {
+  os << '[';
+  for (std::size_t i = 0; i < n; ++i) os << (i ? "," : "") << '"' << v[begin + i] << '"';
+  os << ']';
+}
+
+}  // namespace
+
+void write_lattice_json(std::ostream& os, int nsites, int ng, int nc, const std::vector<Site>& displacements,
+                        const LatticeSeries& series, int check_primes) {
+  const Reconstruction& rec = series.rec;
+  const SeriesLayout lay{ng, nc, static_cast<int>(displacements.size())};
+  os << "{\n\"nsites\": " << nsites << ",\n\"v\": \"" << to_string(series.v) << "\",\n\"order_gap\": " << ng
+     << ",\n\"order_chi\": " << nc << ",\n\"primes\": " << series.primes << ",\n\"check_primes\": " << check_primes
+     << ",\n\"max_bits\": " << rec.max_bits << ",\n\"displacements\": [";
+  for (std::size_t d = 0; d < displacements.size(); ++d) {
+    os << (d ? "," : "") << '[' << displacements[d].a << ',' << displacements[d].b << ']';
+  }
+  os << "],\n\"EN\": ";
+  json_list(os, rec.values, lay.en(), ng + 1);
+  for (auto [name, off] : {std::pair{"Hp", lay.hp()}, std::pair{"Hh", lay.hh()}, std::pair{"S", lay.s()}}) {
+    os << ",\n\"" << name << "\": [";
+    for (int d = 0; d < lay.ncd; ++d) {
+      os << (d ? ",\n  " : "");
+      json_list(os, rec.values, off + static_cast<std::size_t>(d) * (ng + 1), ng + 1);
+    }
+    os << ']';
+  }
+  os << ",\n\"chi\": ";
+  json_list(os, rec.values, lay.chi(), nc + 1);
+  os << ",\n\"m0\": ";
+  json_list(os, rec.values, lay.m0(), nc + 1);
+  os << "\n}\n";
+}
+
+void write_cluster_json(std::ostream& os, int nv, int ng, int nc, int npatterns, const ClusterSeries& series) {
+  const std::vector<std::string>& values = series.rec.values;
+  std::size_t at = 0;
+  auto emit = [&](const char* name, int blocks, int len) {
+    os << (at ? ",\n" : "{\n") << '"' << name << "\": [";
+    for (int q = 0; q < blocks; ++q) {
+      os << (q ? "," : "");
+      json_list(os, values, at, len);
+      at += len;
+    }
+    os << ']';
+  };
+  emit("E", 1, ng + 1);
+  emit("Hp", nv * nv, ng + 1);
+  emit("Hh", nv * nv, ng + 1);
+  emit("corr", nv * nv, ng + 1);
+  emit("chi", npatterns, nc + 1);
+  emit("m0", npatterns, nc + 1);
+  os << ",\n\"primes\": " << series.primes << "\n}\n";
+}
+
+}  // namespace nlce

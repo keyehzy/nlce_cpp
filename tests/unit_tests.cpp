@@ -5,11 +5,13 @@
 #include "graph.hpp"
 #include "modp.hpp"
 #include "pipeline.hpp"
+#include "rational.hpp"
 
 #include <algorithm>
 #include <cstdio>
 #include <numeric>
 #include <random>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -41,6 +43,24 @@ void test_modulus() {
     }
     check(m.from_int(-1) == p - 1, "negative residue");
   }
+}
+
+void test_rational() {
+  check(parse_rational("2/4") == Rational{1, 2}, "reduce 2/4");
+  check(parse_rational("-3/6") == Rational{-1, 2}, "reduce -3/6");
+  check(parse_rational("0/7") == Rational{0, 1}, "reduce 0/7");
+  check(parse_rational("5") == Rational{5, 1}, "integer");
+  for (const char* bad : {"1/0", "1/-5", "1/5x", "abc", "", "/3"}) {
+    bool threw = false;
+    try {
+      parse_rational(bad);
+    } catch (const std::invalid_argument&) {
+      threw = true;
+    }
+    check(threw, std::string("reject \"") + bad + "\"");
+  }
+  check(to_string(Rational{3, 20}) == "3/20" && to_string(Rational{0, 1}) == "0", "to_string");
+  check(file_tag(Rational{3, 20}) == "3over20" && file_tag(Rational{0, 1}) == "0", "file_tag");
 }
 
 std::vector<Edge> random_graph(std::mt19937& rng, int n, double density) {
@@ -141,6 +161,7 @@ void test_small_pass() {
 
 int main() {
   test_modulus();
+  test_rational();
   test_canonical_form();
   test_geometry();
   test_small_pass();

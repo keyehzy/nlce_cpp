@@ -21,6 +21,7 @@ find_package(Boost 1.81 REQUIRED CONFIG)
 find_package(Threads REQUIRED)
 
 add_library(nlce STATIC
+  src/rational.cpp
   src/modp.cpp
   src/lattice.cpp
   src/graph.cpp
@@ -29,6 +30,8 @@ add_library(nlce STATIC
   src/cluster.cpp
   src/pipeline.cpp
   src/reconstruct.cpp
+  src/driver.cpp
+  src/output.cpp
 )
 target_include_directories(nlce PUBLIC src)
 target_link_libraries(nlce PUBLIC PkgConfig::FLINT PkgConfig::GMP Boost::headers Threads::Threads)

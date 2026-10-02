@@ -6,6 +6,8 @@
 // recovered afterwards by Chinese remaindering and rational reconstruction.
 #pragma once
 
+#include "rational.hpp"
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -78,11 +80,6 @@ std::vector<u64> moduli(std::size_t count);
 // v-independent structure of a cluster.  A block of kLanes lanes is processed
 // together so that one traversal of the sparse structure serves all of them.
 inline constexpr int kLanes = 8;
-
-struct Rational {
-  i64 num = 0;
-  i64 den = 1;
-};
 
 struct LaneBlock {
   int count = 0;  // live lanes; the remainder repeat the last live lane
