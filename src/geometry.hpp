@@ -1,0 +1,76 @@
+// Site-cluster geometry of the triangular lattice, independent of V/U.
+//
+// A class is a graph-isomorphism class of connected induced site clusters; a
+// key is a class together with the canonical staggered-current pattern on its
+// edges.  The gap, S(q) and energy are assembled from classes, chi and m0
+// from keys.
+#pragma once
+
+#include "graph.hpp"
+#include "lattice.hpp"
+
+#include <boost/unordered/unordered_flat_map.hpp>
+
+#include <cstdint>
+#include <string>
+#include <vector>
+
+namespace nlce {
+
+using Pattern = std::vector<std::int8_t>;  // one sign per canonical edge
+
+struct Embedding {
+  int cd;              // index into Geometry::displacements
+  int a, b;            // canonical vertex indices
+  std::int64_t fac12;  // embedding weight per lattice site, times 12
+};
+
+struct ClassInfo {
+  Cert cert;
+  int nv = 0;
+  std::vector<Edge> edges;  // canonical, sorted
+  std::vector<int> edge_index;  // nv*nv, -1 where no edge
+  std::vector<std::vector<int>> autos;
+  std::int64_t mult = 0;  // embeddings per lattice site
+  std::vector<Embedding> embeddings;  // site-pair embeddings by displacement
+  std::vector<int> keys;  // decorated keys of this class
+};
+
+struct KeyInfo {
+  int cls = 0;
+  Pattern pattern;
+  std::int64_t mult = 0;
+};
+
+struct Geometry {
+  int smax = 0;
+  std::vector<int> cluster_counts;  // [s], lattice clusters modulo symmetry
+  std::vector<ClassInfo> classes;
+  std::vector<KeyInfo> keys;
+  std::vector<Site> displacements;  // canonical displacements, first-seen order
+  boost::unordered_flat_map<Cert, int, CertHash> class_of;
+  boost::unordered_flat_map<std::string, int> key_of;
+
+  int key_index(int cls, const Pattern& pattern) const;
+};
+
+Geometry build_geometry(int smax);
+
+// Lexicographically smallest image of `signs` (one per class edge, oriented
+// i < j) over the class automorphisms and a global sign flip.
+Pattern canonical_pattern(const ClassInfo& cls, const Pattern& signs);
+
+// A connected proper induced subcluster of a class, mapped to its own class.
+struct SubCluster {
+  int cls = 0;
+  std::vector<int> verts;  // parent vertex labels, increasing
+  std::vector<int> map;    // map[k] = canonical index of verts[k] in `cls`
+  std::vector<int> parent_edges;  // indices of parent edges inside `verts`
+};
+
+std::vector<SubCluster> subclusters(const Geometry& geo, int cls);
+
+// Decorated key of a subcluster given the parent's pattern.
+int subcluster_key(const Geometry& geo, int parent_cls, const SubCluster& sub, const Pattern& parent);
+
+}  // namespace nlce
