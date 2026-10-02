@@ -18,16 +18,44 @@ namespace {
 
 constexpr int L = kLanes;
 
-// Cumulant orders k0..order of one class (or key), all lanes of the pass:
-// data[(q * nk + k - k0) * nlanes + lane].
-struct Weights {
-  int k0 = 0;
-  int nk = 0;
-  std::vector<u64> data;
-  std::size_t at(int q, int k, std::size_t nlanes) const {
-    return (static_cast<std::size_t>(q) * nk + (k - k0)) * nlanes;
+// Cumulant orders k0..order of one class or key, for every lane of the pass:
+// data[(row * nk + k - k0) * nlanes + lane].
+class Weights {
+public:
+  void reset(int rows, int k0, int order, std::size_t nlanes) {
+    k0_ = k0;
+    nk_ = order - k0 + 1;
+    nlanes_ = nlanes;
+    data_.assign(static_cast<std::size_t>(rows) * nk_ * nlanes, 0);
+  }
+  int k0() const { return k0_; }
+  u64* at(int row, int k, std::size_t lane) { return data_.data() + offset(row, k, lane); }
+  const u64* at(int row, int k, std::size_t lane) const { return data_.data() + offset(row, k, lane); }
+
+private:
+  int k0_ = 0;
+  int nk_ = 0;
+  std::size_t nlanes_ = 0;
+  std::vector<u64> data_;
+
+  std::size_t offset(int row, int k, std::size_t lane) const {
+    return (static_cast<std::size_t>(row) * nk_ + (k - k0_)) * nlanes_ + lane;
   }
 };
+
+// Rows of a class's weights: the energy, then Hp, Hh and corr for each
+// vertex pair q = u*nv + w.
+struct ClassRows {
+  int npair = 0;
+  static constexpr int E = 0;
+  int Hp(int q) const { return 1 + q; }
+  int Hh(int q) const { return 1 + npair + q; }
+  int corr(int q) const { return 1 + 2 * npair + q; }
+  int count() const { return 1 + 3 * npair; }
+};
+
+// Rows of a key's weights.
+enum KeyRow { kChiRow = 0, kM0Row = 1, kKeyRows = 2 };
 
 class Pass {
 public:
@@ -114,14 +142,13 @@ private:
 
   void process(int c, std::vector<u64>& totals) {
     const ClassInfo& cls = geo_.classes[c];
-    const int nv = cls.nv;
-    const int s = nv;
-    const std::size_t npair = static_cast<std::size_t>(nv) * nv;
+    const int s = cls.nv;
 
-    ClusterInput input{nv, cls.edges, {}, ng_, nc_};
+    ClusterInput input{cls.nv, cls.edges, {}, ng_, nc_};
     for (int key : cls.keys) input.patterns.push_back(geo_.keys[key].pattern);
     const ClusterPlan plan = plan_cluster(std::move(input));
     const std::vector<SubCluster> subs = subclusters(geo_, c);
+    // subkeys[q][i]: key of subcluster i under the class's pattern q.
     std::vector<std::vector<int>> subkeys(cls.keys.size());
     for (std::size_t q = 0; q < cls.keys.size(); ++q) {
       for (const auto& sub : subs) subkeys[q].push_back(subcluster_key(geo_, c, sub, geo_.keys[cls.keys[q]].pattern));
@@ -129,19 +156,11 @@ private:
 
     const int k0 = s - 1;
     const int k0c = std::max(0, s - 2);
+    // Clusters of the largest size are never subtracted from anything.
     const bool keep = s < geo_.smax;
-    Weights* cw = nullptr;
     if (keep) {
-      cw = &class_w_[c];
-      cw->k0 = k0;
-      cw->nk = ng_ - k0 + 1;
-      cw->data.assign((1 + 3 * npair) * cw->nk * nl_, 0);
-      for (int key : cls.keys) {
-        Weights& kw = key_w_[key];
-        kw.k0 = k0c;
-        kw.nk = nc_ - k0c + 1;
-        kw.data.assign(2 * kw.nk * nl_, 0);
-      }
+      class_w_[c].reset(ClassRows{s * s}.count(), k0, ng_, nl_);
+      for (int key : cls.keys) key_w_[key].reset(kKeyRows, k0c, nc_, nl_);
     }
 
     RawSeries raw;
@@ -149,63 +168,82 @@ private:
       const LaneBlock& blk = blocks_[b];
       const std::size_t g0 = b * L;
       compute_block(plan, blk, raw);
-
-      for (int u = 0; u < nv; ++u) {
-        for (int l = 0; l < blk.count; ++l) {
-          u64& x = raw.Hp[raw.pair_at(u, u, 0) + l];
-          x = blk.mod[l].sub(x, 1);
-        }
-      }
-
-      for (const auto& sub : subs) {
-        const Weights& w = class_w_[sub.cls];
-        const int nv2 = static_cast<int>(sub.verts.size());
-        const int np2 = nv2 * nv2;
-        for (int k = w.k0; k <= ng_; ++k) {
-          subtract(blk, &raw.E[k * L], &w.data[w.at(0, k, nl_) + g0]);
-          for (int x = 0; x < nv2; ++x) {
-            for (int y = 0; y < nv2; ++y) {
-              const int u = sub.verts[x], v = sub.verts[y];
-              const int q = sub.map[x] * nv2 + sub.map[y];
-              subtract(blk, &raw.Hp[raw.pair_at(u, v, k)], &w.data[w.at(1 + q, k, nl_) + g0]);
-              subtract(blk, &raw.Hh[raw.pair_at(u, v, k)], &w.data[w.at(1 + np2 + q, k, nl_) + g0]);
-              if (x != y) subtract(blk, &raw.corr[raw.pair_at(u, v, k)], &w.data[w.at(1 + 2 * np2 + q, k, nl_) + g0]);
-            }
-          }
-        }
-      }
-      for (std::size_t q = 0; q < cls.keys.size(); ++q) {
-        for (std::size_t i = 0; i < subs.size(); ++i) {
-          const Weights& w = key_w_[subkeys[q][i]];
-          for (int k = w.k0; k <= nc_; ++k) {
-            subtract(blk, &raw.chi[raw.pattern_at(static_cast<int>(q), k)], &w.data[w.at(0, k, nl_) + g0]);
-            subtract(blk, &raw.m0[raw.pattern_at(static_cast<int>(q), k)], &w.data[w.at(1, k, nl_) + g0]);
-          }
-        }
-      }
-
+      remove_seed_energy(blk, raw);
+      subtract_subclusters(blk, g0, cls, subs, subkeys, raw);
       check_vanishing(blk, raw, c, k0, k0c);
+      if (keep) store_weights(blk, g0, c, k0, k0c, raw);
+      accumulate(blk, g0, raw, cls, k0, k0c, totals);
+    }
+  }
 
-      if (keep) {
-        for (int k = k0; k <= ng_; ++k) {
-          store(blk, &raw.E[k * L], &cw->data[cw->at(0, k, nl_) + g0]);
-          for (std::size_t q = 0; q < npair; ++q) {
-            const int u = static_cast<int>(q) / nv, v = static_cast<int>(q) % nv;
-            store(blk, &raw.Hp[raw.pair_at(u, v, k)], &cw->data[cw->at(1 + q, k, nl_) + g0]);
-            store(blk, &raw.Hh[raw.pair_at(u, v, k)], &cw->data[cw->at(1 + npair + q, k, nl_) + g0]);
-            store(blk, &raw.corr[raw.pair_at(u, v, k)], &cw->data[cw->at(1 + 2 * npair + q, k, nl_) + g0]);
-          }
-        }
-        for (std::size_t q = 0; q < cls.keys.size(); ++q) {
-          Weights& kw = key_w_[cls.keys[q]];
-          for (int k = k0c; k <= nc_; ++k) {
-            store(blk, &raw.chi[raw.pattern_at(static_cast<int>(q), k)], &kw.data[kw.at(0, k, nl_) + g0]);
-            store(blk, &raw.m0[raw.pattern_at(static_cast<int>(q), k)], &kw.data[kw.at(1, k, nl_) + g0]);
+  // Hp carries the unperturbed doublon energy E_D = 1 on its order-0
+  // diagonal, which would spoil the cancellation of the cumulants; run()
+  // restores it once in the lattice sum.
+  static void remove_seed_energy(const LaneBlock& blk, RawSeries& raw) {
+    for (int u = 0; u < raw.nv; ++u) {
+      u64* x = &raw.Hp[raw.pair_at(u, u, 0)];
+      for (int l = 0; l < blk.count; ++l) x[l] = blk.mod[l].sub(x[l], 1);
+    }
+  }
+
+  // Subtracts the weights of every connected proper induced subcluster, each
+  // mapped from its own canonical labels onto the parent's vertices.
+  void subtract_subclusters(const LaneBlock& blk, std::size_t g0, const ClassInfo& cls,
+                            const std::vector<SubCluster>& subs, const std::vector<std::vector<int>>& subkeys,
+                            RawSeries& raw) const {
+    for (const auto& sub : subs) {
+      const Weights& w = class_w_[sub.cls];
+      const int nv2 = static_cast<int>(sub.verts.size());
+      const ClassRows rows{nv2 * nv2};
+      for (int k = w.k0(); k <= ng_; ++k) {
+        subtract(blk, &raw.E[k * L], w.at(ClassRows::E, k, g0));
+        for (int x = 0; x < nv2; ++x) {
+          for (int y = 0; y < nv2; ++y) {
+            const int u = sub.verts[x], v = sub.verts[y];
+            const int q = sub.map[x] * nv2 + sub.map[y];
+            subtract(blk, &raw.Hp[raw.pair_at(u, v, k)], w.at(rows.Hp(q), k, g0));
+            subtract(blk, &raw.Hh[raw.pair_at(u, v, k)], w.at(rows.Hh(q), k, g0));
+            if (x != y) subtract(blk, &raw.corr[raw.pair_at(u, v, k)], w.at(rows.corr(q), k, g0));
           }
         }
       }
+    }
+    for (std::size_t q = 0; q < cls.keys.size(); ++q) {
+      const int pat = static_cast<int>(q);
+      for (std::size_t i = 0; i < subs.size(); ++i) {
+        const Weights& w = key_w_[subkeys[q][i]];
+        for (int k = w.k0(); k <= nc_; ++k) {
+          subtract(blk, &raw.chi[raw.pattern_at(pat, k)], w.at(kChiRow, k, g0));
+          subtract(blk, &raw.m0[raw.pattern_at(pat, k)], w.at(kM0Row, k, g0));
+        }
+      }
+    }
+  }
 
-      accumulate(blk, g0, raw, cls, k0, k0c, totals);
+  // Keeps the non-vanishing orders of the cumulants for larger clusters.
+  void store_weights(const LaneBlock& blk, std::size_t g0, int c, int k0, int k0c, const RawSeries& raw) {
+    const ClassInfo& cls = geo_.classes[c];
+    const int nv = cls.nv;
+    const ClassRows rows{nv * nv};
+    Weights& cw = class_w_[c];
+    for (int k = k0; k <= ng_; ++k) {
+      store(blk, &raw.E[k * L], cw.at(ClassRows::E, k, g0));
+      for (int u = 0; u < nv; ++u) {
+        for (int v = 0; v < nv; ++v) {
+          const int q = u * nv + v;
+          store(blk, &raw.Hp[raw.pair_at(u, v, k)], cw.at(rows.Hp(q), k, g0));
+          store(blk, &raw.Hh[raw.pair_at(u, v, k)], cw.at(rows.Hh(q), k, g0));
+          store(blk, &raw.corr[raw.pair_at(u, v, k)], cw.at(rows.corr(q), k, g0));
+        }
+      }
+    }
+    for (std::size_t q = 0; q < cls.keys.size(); ++q) {
+      const int pat = static_cast<int>(q);
+      Weights& kw = key_w_[cls.keys[q]];
+      for (int k = k0c; k <= nc_; ++k) {
+        store(blk, &raw.chi[raw.pattern_at(pat, k)], kw.at(kChiRow, k, g0));
+        store(blk, &raw.m0[raw.pattern_at(pat, k)], kw.at(kM0Row, k, g0));
+      }
     }
   }
 
