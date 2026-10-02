@@ -34,18 +34,7 @@ public:
   Pass(const Geometry& geo, int ng, int nc, const std::vector<LaneSpec>& lanes, const PassOptions& opts)
       : geo_(geo), ng_(ng), nc_(nc), lanes_(lanes), opts_(opts), nl_(lanes.size()) {
     layout_ = {ng, nc, static_cast<int>(geo.displacements.size())};
-    const std::size_t nb = (nl_ + L - 1) / L;
-    blocks_.resize(nb);
-    for (std::size_t b = 0; b < nb; ++b) {
-      LaneBlock& blk = blocks_[b];
-      blk.count = static_cast<int>(std::min<std::size_t>(L, nl_ - b * L));
-      for (int l = 0; l < L; ++l) {
-        const LaneSpec& spec = lanes_[b * L + std::min(l, blk.count - 1)];
-        blk.mod[l] = Modulus(spec.p);
-        blk.v[l] = spec.v;
-        blk.vres[l] = blk.mod[l].mul(blk.mod[l].from_int(spec.v.num), blk.mod[l].inv(blk.mod[l].from_int(spec.v.den)));
-      }
-    }
+    for (std::size_t b = 0; b < nl_; b += L) blocks_.push_back(make_lane_block(lanes_, b));
     class_w_.resize(geo.classes.size());
     key_w_.resize(geo.keys.size());
   }

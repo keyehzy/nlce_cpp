@@ -95,29 +95,15 @@ ClusterSeries cluster_series(const ClusterPlan& plan, const Rational& v, int che
   std::vector<u64> primes;
   std::vector<std::vector<u64>> residues;
   for (int target = 8;; target += target / 2) {
-    const auto pool = moduli(target + ncheck);
+    std::vector<LaneSpec> specs;
+    for (u64 p : moduli(target + ncheck)) specs.push_back({v, p});
     RawSeries raw;
-    for (std::size_t b = primes.size(); b < pool.size(); b += kLanes) {
-      LaneBlock blk;
-      blk.count = static_cast<int>(std::min<std::size_t>(kLanes, pool.size() - b));
-      for (int l = 0; l < kLanes; ++l) {
-        blk.mod[l] = Modulus(pool[b + std::min(l, blk.count - 1)]);
-        blk.v[l] = v;
-      }
+    for (std::size_t b = primes.size(); b < specs.size(); b += kLanes) {
+      const LaneBlock blk = make_lane_block(specs, b);
       compute_block(plan, blk, raw);
       for (int l = 0; l < blk.count; ++l) {
-        std::vector<u64> flat;
-        auto take = [&](const std::vector<u64>& x) {
-          for (std::size_t i = 0; i < x.size() / kLanes; ++i) flat.push_back(x[i * kLanes + l]);
-        };
-        take(raw.E);
-        take(raw.Hp);
-        take(raw.Hh);
-        take(raw.corr);
-        take(raw.chi);
-        take(raw.m0);
-        primes.push_back(pool[b + l]);
-        residues.push_back(std::move(flat));
+        primes.push_back(specs[b + l].p);
+        residues.push_back(raw.lane(l));
       }
     }
     Reconstruction rec = reconstruct(primes, residues, ncheck);

@@ -73,6 +73,9 @@ struct RawSeries {
   std::size_t pattern_at(int q, int k) const {
     return (static_cast<std::size_t>(q) * (nc + 1) + k) * kLanes;
   }
+
+  // Every residue of lane l: E, Hp, Hh, corr, chi, m0 in the orders above.
+  std::vector<u64> lane(int l) const;
 };
 
 void compute_block(const ClusterPlan& plan, const LaneBlock& lanes, RawSeries& out);

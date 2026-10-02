@@ -81,11 +81,18 @@ std::vector<u64> moduli(std::size_t count);
 // together so that one traversal of the sparse structure serves all of them.
 inline constexpr int kLanes = 8;
 
+struct LaneSpec {
+  Rational v;
+  u64 p = 0;
+};
+
 struct LaneBlock {
   int count = 0;  // live lanes; the remainder repeat the last live lane
   std::array<Modulus, kLanes> mod{};
   std::array<Rational, kLanes> v{};
-  std::array<u64, kLanes> vres{};  // V/U mod p
 };
+
+// The block of lanes specs[begin], ..., up to kLanes of them.
+LaneBlock make_lane_block(const std::vector<LaneSpec>& specs, std::size_t begin);
 
 }  // namespace nlce

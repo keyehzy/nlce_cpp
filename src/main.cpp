@@ -158,13 +158,9 @@ int cmd_bench(const Args& args) {
   const ClusterPlan plan = plan_cluster(in);
   std::printf("plan %.3fs  mott %u  particle %u  hole %u  pair moves %zu\n", since(t0), plan.mott.size(),
               plan.particle.size(), plan.hole.size(), plan.pairs.size());
-  LaneBlock blk;
-  blk.count = kLanes;
-  const auto pool = moduli(kLanes);
-  for (int l = 0; l < kLanes; ++l) {
-    blk.mod[l] = Modulus(pool[l]);
-    blk.v[l] = parse_rational(args.get("v", "1/5"));
-  }
+  std::vector<LaneSpec> specs;
+  for (u64 p : moduli(kLanes)) specs.push_back({parse_rational(args.get("v", "1/5")), p});
+  const LaneBlock blk = make_lane_block(specs, 0);
   RawSeries raw;
   for (int r = 0; r < reps; ++r) {
     t0 = std::chrono::steady_clock::now();

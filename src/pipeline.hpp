@@ -16,11 +16,6 @@
 
 namespace nlce {
 
-struct LaneSpec {
-  Rational v;
-  u64 p = 0;
-};
-
 // Flattened lattice series of one lane:
 //   EN[k], Hp[cd][k], Hh[cd][k], S[cd][k], chi[k'], m0[k']
 // with k <= ng, k' <= nc, cd over Geometry::displacements.

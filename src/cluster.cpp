@@ -469,6 +469,15 @@ ClusterPlan plan_cluster(ClusterInput in) {
   return plan;
 }
 
+std::vector<u64> RawSeries::lane(int l) const {
+  std::vector<u64> flat;
+  flat.reserve((E.size() + Hp.size() + Hh.size() + corr.size() + chi.size() + m0.size()) / kLanes);
+  for (const auto* x : {&E, &Hp, &Hh, &corr, &chi, &m0}) {
+    for (std::size_t i = l; i < x->size(); i += kLanes) flat.push_back((*x)[i]);
+  }
+  return flat;
+}
+
 void compute_block(const ClusterPlan& plan, const LaneBlock& lanes, RawSeries& out) {
   Engine(plan, lanes, out).run();
 }

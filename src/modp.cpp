@@ -2,6 +2,7 @@
 
 #include <flint/ulong_extras.h>
 
+#include <algorithm>
 #include <stdexcept>
 
 namespace nlce {
@@ -46,6 +47,18 @@ std::vector<u64> moduli(std::size_t count) {
     n -= 2;
   }
   return out;
+}
+
+LaneBlock make_lane_block(const std::vector<LaneSpec>& specs, std::size_t begin) {
+  if (begin >= specs.size()) throw std::out_of_range("empty lane block");
+  LaneBlock blk;
+  blk.count = static_cast<int>(std::min<std::size_t>(kLanes, specs.size() - begin));
+  for (int l = 0; l < kLanes; ++l) {
+    const LaneSpec& spec = specs[begin + std::min(l, blk.count - 1)];
+    blk.mod[l] = Modulus(spec.p);
+    blk.v[l] = spec.v;
+  }
+  return blk;
 }
 
 }  // namespace nlce
