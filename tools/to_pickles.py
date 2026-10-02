@@ -19,6 +19,16 @@ import sys
 from fractions import Fraction
 from pathlib import Path
 
+# The Python drivers fill series with one shared Fraction(0); reusing a single
+# object here makes pickle memoise it the same way, so the files match byte
+# for byte and not only in value.
+ZERO = Fraction(0)
+
+
+def coefficient(x):
+    f = Fraction(x)
+    return ZERO if f == 0 else f
+
 
 def convert(path, dst):
     d = json.loads(path.read_text())
@@ -26,7 +36,7 @@ def convert(path, dst):
     v = Fraction(d["v"])
     tag = path.stem.split("_v", 1)[1]
     disp = [tuple(cd) for cd in d["displacements"]]
-    series = lambda xs: [Fraction(x) for x in xs]
+    series = lambda xs: [coefficient(x) for x in xs]
 
     res = {"order": ng, "nsites": n, "reliable_order": n - 1, "v": v, "lattice": "triangular",
            "EN": series(d["EN"]),
