@@ -9,8 +9,8 @@ For each series_s{N}_v{tag}.json in SRC writes, into DST,
     m0_site_tri_s{N}_v{tag}.pkl    m0                (series/nlce_chi.py run_m0)
 
 with the same keys, values and dictionary order as the Python drivers.  The
-chain, square and honeycomb lattice give res_site_{chain,square,honeycomb}_...
-and sq_site_... files in the same format, without chi and m0.
+other lattices give res_site_{chain,square,honeycomb,kagome}_... and
+sq_site_... files in the same format, without chi and m0.
 
 Usage: to_pickles.py SRC [DST]
 """
@@ -32,7 +32,7 @@ def coefficient(x):
     return ZERO if f == 0 else f
 
 
-LATTICE_TAGS = {"triangular": "tri", "square": "square", "chain": "chain", "honeycomb": "honeycomb"}
+LATTICE_TAGS = {"triangular": "tri", "square": "square", "chain": "chain", "honeycomb": "honeycomb", "kagome": "kagome"}
 
 
 def convert(path, dst, quiet=False):

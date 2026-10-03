@@ -5,8 +5,9 @@ C++20 implementation of the site-cluster linked-cluster expansion in
 the one-body structure factor S(q), the chiral susceptibility chi_kappa and the
 equal-time moment m0 of the frustrated triangular-lattice extended
 Bose-Hubbard model at unit filling, as exact rational series in x = t/U.
-The same expansion runs on the chain, the square and the honeycomb lattice
-(Delta, S and the energy; chi and m0 need the triangular staggered current).
+The same expansion runs on the chain and the square, honeycomb and kagome
+lattices (Delta, S and the energy; chi and m0 need the triangular staggered
+current).
 
 ## Build
 
@@ -26,9 +27,9 @@ Requires CMake >= 3.24, a C++20 compiler, FLINT 3, GMP and Boost headers
     python3 tools/to_pickles.py out_s10 out_s10/pkl            # series/*.pkl format
     ./build/nlce_run run --lattice square --nsites 11 --v 0 --out out_sq
 
-`--lattice` is `triangular` (default), `square`, `chain` or `honeycomb`.  The hopping enters
-as +t (frustrated on the triangular lattice), so the usual -t model follows by
-x -> -x.  `--nsites s` gives Delta and S through x^(s-1), chi and m0 through
+`--lattice` is `triangular` (default), `square`, `chain`, `honeycomb` or
+`kagome`.  The hopping enters as +t (frustrated on the triangular and kagome
+lattices), so the usual -t model follows by x -> -x.  `--nsites s` gives Delta and S through x^(s-1), chi and m0 through
 x^(s-2).  `tools/q0_series.py SERIES.json` prints Delta(q=0), S(q=0) and
 E/N in the -t convention.
 `nlce_run geometry --nsites s` prints cluster, class and key counts;
@@ -44,10 +45,11 @@ s = 9 and 6 minutes at s = 10 (1.4 GB peak), reproducing the HPC pickles in
   translation and the point group (D6, D4, or inversion on the chain), grouped
   into graph-isomorphism classes by an individualisation-refinement canonical
   form; current patterns are canonicalised over automorphisms and a global
-  sign.  The honeycomb lattice is the triangular lattice without the hexagon
-  centres ((2a + b) = 0 mod 3), with the D6 of a hexagon centre and the
-  translations that preserve the sublattices; clusters are counted per unit
-  cell of two sites and the lattice sums divided by two.
+  sign.  The honeycomb and kagome lattices are the triangular lattice without
+  its hexagon centres (a - b = 0 mod 3, resp. a and b even), with the D6 of a
+  hexagon centre and the translations that preserve the sublattices; clusters
+  are counted per unit cell of two or three sites and the lattice sums
+  divided accordingly.
 * **Exact arithmetic by multiple primes** (`modp`, `reconstruct`): every step —
   perturbation theory, subcluster subtraction, lattice assembly — is ring
   arithmetic, so it runs modulo 50-bit primes.  The lattice coefficients are
@@ -129,7 +131,7 @@ at x^13) are compared to a relative 1e-12.
 ## Honeycomb lattice
 
 No published series exists to compare with, so the honeycomb lattice is
-checked by `tools/honeycomb_torus.py` (the `honeycomb_torus` ctest): a
+checked by `tools/torus_check.py` (the `torus_honeycomb` ctest): a
 14-site periodic torus, solved as a single cluster, bypasses the cluster
 enumeration, symmetry reduction and lattice sums, and its shortest
 non-contractible cycle of 6 bonds makes it exact through x^5, the first order
@@ -161,4 +163,40 @@ convention of the tables above and per site, are
 
 The ratios of the S coefficients, about 11.2 at x^13, put the end of the
 n = 1 Mott lobe near t/U = 0.085.
+
+## Kagome lattice
+
+The kagome lattice is checked the same way: its site clusters are counted
+independently in a unit test, dropping the point group leaves the q = 0
+sums unchanged, and the 15-site torus of the `torus_kagome` ctest, the best
+with at most 16 sites, has non-contractible cycles of 4 bonds, so it is
+exact through x^3, the first order at which the gap sees a triangle.  Orders
+1 and 2 equal the square lattice's, which also has z = 4.
+
+The kagome lattice is not bipartite, so the sign of the hopping matters.  In
+the -t convention of the tables, the bottom of both the particle and the hole
+band is the uniform state at q = 0, and Delta(q=0) is the Mott gap; for +t
+(nlce_run's sign, x -> -x) the band bottom is the flat band instead.  At
+s = 14 (1.9 hours on 5 threads, 10 GB resident and well beyond in compressed
+memory) the series at V/U = 0, per site, are
+
+| n | Delta(q=0) | S(q=0) | E/N |
+|---:|---:|---:|---:|
+| 0 | 1 | 3 | 0 |
+| 1 | -12 | 32 | 0 |
+| 2 | -22 | 432 | -8 |
+| 3 | -75 | 5952 | -24 |
+| 4 | -18769/10 | 260624/3 | -40 |
+| 5 | -1087631/60 | 3927520/3 | -376/3 |
+| 6 | -1133014847/4500 | 539721152/27 | -28640/9 |
+| 7 | -31170197257/13500 | 24806797120/81 | -1706768/27 |
+| 8 | -535354829732897/18900000 | 5704703275684/1215 | -7644904/9 |
+| 9 | -3920056445180326307/11907000000 | 1317240246607319/18225 | -605093252/81 |
+| 10 | -697318177709490684707/117209531250 | 60026911904889729341/53581500 | -2030095804936/42525 |
+| 11 | -183365470329577591286207713/2362944150000000 | 2161248486412136942537093/123773265000 | -48981304920963067/107163000 |
+| 12 | -2290711806389476905930658932763/2046900369937500000 | 156033605031432604882333176353/571832484300000 | -78935190877178700373/9168390000 |
+| 13 | -3127435723051715146765371026090141/236416992727781250000 | 146602210124785682880061861510244833/34344259007058000000 | -4266142812217166175945449/29705583600000 |
+
+The ratios of the S coefficients, about 15.6 at x^13, put the end of the
+n = 1 Mott lobe near t/U = 0.062 for -t hopping.
 

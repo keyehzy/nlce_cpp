@@ -1,20 +1,22 @@
 #!/usr/bin/env python3
-"""Check the honeycomb lattice series against a periodic honeycomb torus.
+"""Check honeycomb or kagome lattice series against a periodic torus.
 
-There is no published reference for the honeycomb lattice, so this solves a
-torus, the honeycomb modulo the superlattice spanned by S1 and S2, as a
-single finite cluster with `nlce_run cluster` and compares its q = 0 series
-(tools/q0_series.py) with `nlce_run run --lattice honeycomb`.  The torus
-bypasses the cluster enumeration, symmetry reduction and lattice sums.
+There is no published reference for these lattices, so this solves a torus,
+the lattice modulo the superlattice spanned by S1 and S2, as a single finite
+cluster with `nlce_run cluster` and compares its q = 0 series
+(tools/q0_series.py) with `nlce_run run --lattice L`.  The torus bypasses the
+cluster enumeration, symmetry reduction and lattice sums.
 
 A process on the torus lifts to the infinite lattice unless its hops close a
 loop around the torus, which takes at least L hops, L being the shortest
 non-contractible cycle; the torus series are then exact through x^(L-1).
-The default 14-site torus has L = 6, so Delta(0), S(0) and E/N must agree
-through x^5, the first order at which Delta sees a hexagon.
+The default tori, the best with at most 16 sites, are a 14-site honeycomb
+torus with L = 6, exact through x^5, the first order at which Delta sees a
+hexagon, and a 15-site kagome torus with L = 4, exact through x^3, the first
+order at which it sees a triangle.
 
-Usage: honeycomb_torus.py [--binary build/nlce_run] [--nsites 7]
-                          [--s1 -3,9 --s2 -7,14 --loop 6]
+Usage: torus_check.py --lattice honeycomb|kagome [--binary build/nlce_run]
+                      [--nsites 7] [--s1 A,B --s2 A,B --loop L]
 """
 
 import argparse
@@ -29,19 +31,22 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from q0_series import lattice_q0, minus_t_sign  # noqa: E402
 
-# Honeycomb sites are the triangular sites (a, b) with (2a + b) mod 3 != 0.
+# Both are triangular lattices (a, b) without their hexagon centres, which are
+# also the translations; default tori (s1, s2, shortest non-contractible cycle).
 DIRS = [(1, 0), (0, 1), (1, -1)]
+LATTICES = {
+    "honeycomb": {"centre": lambda s: (s[0] - s[1]) % 3 == 0, "torus": ((-3, 9), (-7, 14), 6), "z": 3},
+    "kagome": {"centre": lambda s: s[0] % 2 == 0 and s[1] % 2 == 0, "torus": ((2, 6), (0, 10), 4), "z": 4},
+}
 
 
-def is_site(s):
-    return (2 * s[0] + s[1]) % 3 != 0
-
-
-def torus_graph(s1, s2):
-    """Sites and bonds of the honeycomb modulo the superlattice (s1, s2)."""
+def torus_graph(lattice, s1, s2):
+    """Sites and bonds of the lattice modulo the superlattice (s1, s2)."""
+    centre = LATTICES[lattice]["centre"]
+    is_site = lambda s: not centre(s)
+    if not (centre(s1) and centre(s2)):
+        raise ValueError("superlattice vectors must be %s translations" % lattice)
     det = s1[0] * s2[1] - s1[1] * s2[0]
-    if det % 3:
-        raise ValueError("superlattice vectors must be honeycomb translations")
 
     def cell(s):
         # coordinates in the (s1, s2) basis modulo 1
@@ -66,7 +71,7 @@ def torus_graph(s1, s2):
                     raise ValueError("torus too small: a bond closes on itself")
                 bonds.add((min(i, j), max(i, j)))
     n = len(index)
-    if len(bonds) != 3 * n // 2:
+    if 2 * len(bonds) != LATTICES[lattice]["z"] * n:
         raise ValueError("torus too small: repeated bonds")
     return n, sorted(bonds)
 
@@ -95,26 +100,28 @@ def torus_q0(binary, n, bonds, order):
 
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument("--lattice", required=True, choices=sorted(LATTICES))
     ap.add_argument("--binary", default=str(HERE.parent / "build" / "nlce_run"))
-    ap.add_argument("--nsites", type=int, default=7, help="lattice expansion size, at least loop + 1")
-    ap.add_argument("--s1", default="-3,9")
-    ap.add_argument("--s2", default="-7,14")
-    ap.add_argument("--loop", type=int, default=6, help="shortest non-contractible cycle of the torus")
+    ap.add_argument("--nsites", type=int, default=7, help="lattice expansion size, at least loop")
+    ap.add_argument("--s1")
+    ap.add_argument("--s2")
+    ap.add_argument("--loop", type=int, help="shortest non-contractible cycle of the torus")
     args = ap.parse_args()
-    s1 = tuple(int(x) for x in args.s1.split(","))
-    s2 = tuple(int(x) for x in args.s2.split(","))
-    order = args.loop - 1
+    d1, d2, dloop = LATTICES[args.lattice]["torus"]
+    s1 = tuple(int(x) for x in args.s1.split(",")) if args.s1 else d1
+    s2 = tuple(int(x) for x in args.s2.split(",")) if args.s2 else d2
+    order = (args.loop or dloop) - 1
     if args.nsites - 1 < order:
         ap.error("--nsites must be at least --loop")
 
-    n, bonds = torus_graph(s1, s2)
+    n, bonds = torus_graph(args.lattice, s1, s2)
     torus = torus_q0(args.binary, n, bonds, order)
-    with tempfile.TemporaryDirectory(prefix="nlce_honeycomb_") as tmp:
-        subprocess.run([args.binary, "run", "--lattice", "honeycomb", "--nsites", str(args.nsites), "--v", "0",
+    with tempfile.TemporaryDirectory(prefix="nlce_torus_") as tmp:
+        subprocess.run([args.binary, "run", "--lattice", args.lattice, "--nsites", str(args.nsites), "--v", "0",
                         "--out", tmp], check=True, stderr=subprocess.DEVNULL)
         lattice = lattice_q0(json.loads(next(Path(tmp).glob("series_s*_v0.json")).read_text()))
 
-    print("honeycomb torus: %d sites, %d bonds, exact through x^%d" % (n, len(bonds), order))
+    print("%s torus: %d sites, %d bonds, exact through x^%d" % (args.lattice, n, len(bonds), order))
     bad = 0
     for name in ("gap", "S", "EN"):
         same = torus[name] == lattice[name][: order + 1]

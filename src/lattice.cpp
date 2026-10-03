@@ -67,6 +67,13 @@ const std::vector<PointOp>& d6_group() {
 
 }  // namespace
 
+int Lattice::residue(Site s) const {
+  // s minus k (q, r) lies in the first row of cells, 0 <= b < r.
+  const int k = s.b >= 0 ? s.b / cell.r : -((-s.b + cell.r - 1) / cell.r);
+  const int a = ((s.a - k * cell.q) % cell.p + cell.p) % cell.p;
+  return (s.b - k * cell.r) * cell.p + a;
+}
+
 int Lattice::cell_sites() const {
   return static_cast<int>(std::count_if(anchors.begin(), anchors.end(), [](const auto& a) { return a.has_value(); }));
 }
@@ -92,24 +99,40 @@ const Lattice& triangular_lattice() {
 }
 
 const Lattice& honeycomb_lattice() {
-  // Residues of (2a + b) mod 3: 0 for the hexagon centres, 1 and 2 for the two
-  // sublattices.  Every triangular bond joins different residues, so between
-  // sites they are exactly the honeycomb bonds.  The D6 about a hexagon centre
-  // maps residue r to -r and so preserves the sites and the translations.
+  // Translations (3, 0) and (1, 1), so the residue is (a - b) mod 3: 0 for the
+  // hexagon centres, 1 and 2 for the two sublattices.  Every triangular bond
+  // joins different residues, so between sites they are exactly the
+  // honeycomb bonds.  The D6 about a hexagon centre maps residue r to -r and
+  // so preserves the sites and the translations.
   static const Lattice lat{.name = "honeycomb",
                            .dirs = {{1, 0}, {0, 1}, {1, -1}},
                            .group = d6_group(),
-                           .period = 3,
-                           .form = {2, 1},
-                           .anchors = {std::nullopt, Site{0, 1}, Site{1, 0}}};
+                           .cell = {3, 1, 1},
+                           .anchors = {std::nullopt, Site{1, 0}, Site{0, 1}}};
+  return lat;
+}
+
+const Lattice& kagome_lattice() {
+  // Translations (2, 0) and (0, 2); the residue (a mod 2) + 2 (b mod 2) is 0
+  // for the hexagon centres and 1, 2, 3 for the three sublattices.  Each site
+  // keeps four of its six triangular neighbours, the other two being hexagon
+  // centres, and the kept bonds are those of the kagome lattice.  The D6
+  // about a hexagon centre preserves the even points, hence the sites and
+  // the translations.
+  static const Lattice lat{.name = "kagome",
+                           .dirs = {{1, 0}, {0, 1}, {1, -1}},
+                           .group = d6_group(),
+                           .cell = {2, 0, 2},
+                           .anchors = {std::nullopt, Site{1, 0}, Site{0, 1}, Site{1, 1}}};
   return lat;
 }
 
 const Lattice& lattice_by_name(const std::string& name) {
-  for (const Lattice* lat : {&chain_lattice(), &square_lattice(), &triangular_lattice(), &honeycomb_lattice()}) {
+  for (const Lattice* lat :
+       {&chain_lattice(), &square_lattice(), &triangular_lattice(), &honeycomb_lattice(), &kagome_lattice()}) {
     if (name == lat->name) return *lat;
   }
-  throw std::invalid_argument("unknown lattice " + name + " (chain, square, triangular, honeycomb)");
+  throw std::invalid_argument("unknown lattice " + name + " (chain, square, triangular, honeycomb, kagome)");
 }
 
 Site canonical_displacement(const Lattice& lat, Site d) {
@@ -159,8 +182,11 @@ int site_orbit_size(const Lattice& lat, const std::vector<Site>& sites) {
 std::vector<std::vector<std::vector<Site>>> enumerate_site_clusters(const Lattice& lat, int smax) {
   if (smax < 1) throw std::invalid_argument("smax must be positive");
   std::vector<std::vector<std::vector<Site>>> reps(smax + 1);
-  const auto first = std::find_if(lat.anchors.begin(), lat.anchors.end(), [](const auto& a) { return a.has_value(); });
-  reps[1].push_back(canonical_sites(lat, {**first}));
+  for (const auto& anchor : lat.anchors) {
+    if (!anchor) continue;
+    auto key = canonical_sites(lat, {*anchor});
+    if (std::find(reps[1].begin(), reps[1].end(), key) == reps[1].end()) reps[1].push_back(std::move(key));
+  }
   for (int s = 1; s < smax; ++s) {
     boost::unordered_flat_set<std::vector<Site>, SitesHash> seen;
     auto& next = reps[s + 1];

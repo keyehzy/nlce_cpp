@@ -203,6 +203,30 @@ void test_honeycomb_geometry() {
   }
 }
 
+// Kagome site clusters, counted independently from the kagome as the edge
+// midpoints of the triangular lattice of hexagon centres: modulo symmetry and
+// per unit cell.
+void test_kagome_geometry() {
+  const int free[] = {0, 1, 1, 3, 4, 12, 27, 78, 208, 635};
+  const std::int64_t fixed[] = {0, 3, 6, 14, 36, 99, 281, 816, 2415, 7260};
+  const Lattice& lat = kagome_lattice();
+  check(lat.cell_sites() == 3, "kagome unit cell");
+  const Geometry geo = build_geometry(lat, 9);
+  for (int s = 1; s <= 9; ++s) {
+    std::int64_t mult = 0;
+    for (const auto& c : geo.classes) mult += c.nv == s ? c.mult : 0;
+    check(geo.cluster_counts[s] == free[s], "kagome clusters s=" + std::to_string(s));
+    check(mult == fixed[s], "kagome embeddings per cell s=" + std::to_string(s));
+  }
+  for (const auto& c : geo.classes) {
+    for (int v = 0; v < c.nv; ++v) {
+      int deg = 0;
+      for (auto [i, j] : c.edges) deg += (i == v) + (j == v);
+      check(deg <= 4, "kagome degree");
+    }
+  }
+}
+
 // Per lane: Delta(q=0), S(q=0), E/N, chi and m0 residues, i.e. the
 // displacement sums weighted by orbit size.
 std::vector<std::vector<u64>> q0_sums(const Geometry& geo, const std::vector<std::vector<u64>>& series,
@@ -243,7 +267,8 @@ void test_point_group_reduction() {
   PassOptions opts;
   opts.threads = 2;
   opts.verbose = false;
-  for (const auto& [base, smax] : {std::pair{&honeycomb_lattice(), 8}, std::pair{&triangular_lattice(), 6}}) {
+  for (const auto& [base, smax] : {std::pair{&honeycomb_lattice(), 8}, std::pair{&kagome_lattice(), 7},
+                                   std::pair{&triangular_lattice(), 6}}) {
     Lattice bare = *base;
     bare.group = {{1, 0, 0, 1}};
     const int ng = smax - 1, nc = base->currents ? smax - 2 : 0;
@@ -318,6 +343,7 @@ int main() {
   test_geometry();
   test_bipartite_geometry();
   test_honeycomb_geometry();
+  test_kagome_geometry();
   test_point_group_reduction();
   test_small_pass();
   test_occupation_cap();
