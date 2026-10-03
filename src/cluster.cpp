@@ -17,9 +17,9 @@ using Vec = std::vector<u64>;
 //  * u64 sums of coefficient * residue over the incoming moves of one state
 //    (hopping, current, H_eff recursions): a coefficient is an occupation,
 //    at most kMaxOccupation, and a state has at most nv(nv - 1) moves.
-//  * u128 sums of residue products: at most kMaxOrder * kMaxVertices terms
-//    in the energy and H_eff recursions and the series divisions, and at
-//    most kMaxSectorStates terms in a dot product.
+//  * u128 sums of residue products: at most kMaxOrder * kMaxSeeds terms in
+//    the energy and H_eff recursions and the series divisions, and at most
+//    kMaxSectorStates terms in a dot product.
 //  * correlations(): per state and order, at most two moves per vertex pair
 //    times kMaxOrder + 1 splits a + b, each coefficient * residue * residue,
 //    folded every kFoldStates states.
@@ -32,7 +32,8 @@ constexpr u128 kResidueMax = (u128(1) << kPrimeBits) - 1;
 constexpr u128 kU64Max = ~u64(0);
 constexpr u128 kU128Max = ~u128(0);
 static_assert(fits(kMaxVertices * (kMaxVertices - 1), kMaxOccupation * kResidueMax, kU64Max));
-static_assert(fits(u128(kMaxOrder + 1) * kMaxVertices, kResidueMax * kResidueMax, kU128Max));
+constexpr int kMaxSeeds = kMaxVertices * (kMaxVertices - 1);  // doublon-holon seeds
+static_assert(fits(u128(kMaxOrder + 1) * kMaxSeeds, kResidueMax * kResidueMax, kU128Max));
 static_assert(fits(kMaxSectorStates, kResidueMax * kResidueMax, kU128Max));
 static_assert(fits(u128(kFoldStates) * 2 * (kMaxOrder + 1) + 1, kMaxOccupation * kResidueMax * kResidueMax,
                    kU128Max));
@@ -91,8 +92,10 @@ public:
     out_.corr.assign(npair * (ng_ + 1) * L, 0);
     out_.chi.assign(npat * (nc_ + 1) * L, 0);
     out_.m0.assign(npat * (nc_ + 1) * L, 0);
+    out_.ndh = P_.in.ndh;
+    out_.Idh.assign(out_.ndh >= 0 ? npair * npair * (out_.ndh + 1) * L : 0, 0);
 
-    inv_mott_ = inverse_denominators(P_.mott, 0);
+    inv_mott_ = inverse_denominators(P_.mott, {0, 0});
     ground_chain(false, R_, out_.E);
     Vec left_energy((ng_ + 1) * L, 0);
     ground_chain(true, L_, left_energy);
@@ -101,10 +104,12 @@ public:
     normalisation();
     correlations();
     for (std::size_t q = 0; q < npat; ++q) decoration(static_cast<int>(q));
+    if (out_.ndh >= 0) vacuum_pairs();
     R_ = {};
     L_ = {};
-    effective_hamiltonian(P_.particle, 1, out_.Hp);
-    effective_hamiltonian(P_.hole, 0, out_.Hh);
+    effective_hamiltonian(P_.particle, out_.Hp);
+    effective_hamiltonian(P_.hole, out_.Hh);
+    if (out_.ndh >= 0) doublon_holon();
   }
 
 private:
@@ -114,14 +119,16 @@ private:
   const int nv_, ng_, nc_;
   Vec inv_mott_;
   Chain R_, L_;     // right and left ground-state vectors
+  Vec vac_pairs_;   // [(a * (ndh + 1) + k) * L]: the right ground state on doublon-holon seed a
   Vec norm_inv_;    // series 1/<phi|psi>, [k][l]
 
   const Modulus& M(int l) const { return lb_.mod[l]; }
 
-  // 1/(E_D - E0(t)) per energy class and lane.  Classes used only by seed
-  // states are never inverted; any other vanishing denominator is a genuine
-  // degeneracy of H0, which the perturbation theory cannot handle.
-  Vec inverse_denominators(const Sector& sec, int ed) const {
+  // 1/(E_seed - E0(t)) per energy class and lane, for a seed of unperturbed
+  // energy (onsite, bonds).  Classes used only by seed states are never
+  // inverted; any other vanishing denominator is a genuine degeneracy of H0,
+  // which the perturbation theory cannot handle.
+  Vec inverse_denominators(const Sector& sec, std::pair<int, int> seed) const {
     std::vector<char> used(sec.energies.size(), 0);
     for (std::uint32_t t = sec.nseeds; t < sec.size(); ++t) used[sec.energy_class[t]] = 1;
     Vec inv(sec.energies.size() * L, 0);
@@ -130,7 +137,7 @@ private:
       auto [onsite, bonds] = sec.energies[c];
       for (int l = 0; l < L; ++l) {
         const Rational& v = lb_.v[l];
-        const i64 num = static_cast<i64>(ed - onsite) * v.den - v.num * bonds;
+        const i64 num = static_cast<i64>(seed.first - onsite) * v.den + v.num * (seed.second - bonds);
         if (num == 0) throw std::domain_error("degenerate energy denominator");
         inv[c * L + l] = M(l).mul(M(l).from_int(v.den), M(l).inv(M(l).from_int(num)));
       }
@@ -355,83 +362,248 @@ private:
     divide_by_norm(m0.data(), nc_, &out_.m0[out_.pattern_at(q, 0)]);
   }
 
-  // Bloch effective Hamiltonian in the one-quasiparticle manifold
-  // {seed j}, with E_D = ed, minus the cluster Mott energy.
-  void effective_hamiltonian(const Sector& S, int ed, Vec& H) {
-    const int nv = nv_;
-    const Vec inv = inverse_denominators(S, ed);
-    auto at = [&](int i, int j, int k) { return ((static_cast<std::size_t>(i) * nv + j) * (ng_ + 1) + k) * L; };
+  // Bloch effective Hamiltonian P H Omega on the seeds of S through x^order:
+  // H[((i * ns + j) * (order + 1) + k) * L] is the amplitude from seed j to
+  // seed i.  A seed's unperturbed energy E_j need not be shared by the others,
+  // so the wave operator solves the generalised Bloch equation, column by
+  // column,
+  //   (E_j - E_t) psi_j[t] = (T psi_j)[t] - sum_{m >= 1} sum_i psi_i[t] H[i, j, m]
+  // for every non-seed state t.  The component of psi_j at t vanishes unless t
+  // lies within k hops of seed j, and H[i, j, m] unless seed i lies within m
+  // hops of seed j.
+  //
+  // With `probe` set, probe_out[(j * order + k) * L] receives psi_j^(k) at that
+  // state for k < order.
+  void bloch(const Sector& S, int order, Vec& H, std::uint32_t probe = ~0u, Vec* probe_out = nullptr) {
+    const int ns = S.nseeds;
+    if (probe_out) probe_out->assign(static_cast<std::size_t>(ns) * order * L, 0);
+    auto at = [&](int i, int j, int k) { return ((static_cast<std::size_t>(i) * ns + j) * (order + 1) + k) * L; };
+    auto seed_dist = [&](std::uint32_t t, int j) { return S.seed_dist[static_cast<std::size_t>(t) * ns + j]; };
+    H.assign(static_cast<std::size_t>(ns) * ns * (order + 1) * L, 0);
 
-    std::vector<Vec> psi(ng_ + 1);
-    std::vector<std::uint32_t> len(ng_ + 1, 0);
-    len[0] = S.len(0);
-    psi[0].assign(static_cast<std::size_t>(len[0]) * nv * L, 0);
-    for (int j = 0; j < nv; ++j) {
-      for (int l = 0; l < L; ++l) {
-        psi[0][(static_cast<std::size_t>(j) * nv + j) * L + l] = 1;
-        H[at(j, j, 0) + l] = static_cast<u64>(ed);
+    std::vector<int> energy_of(ns);
+    std::vector<int> seed_classes;
+    std::vector<Vec> inv;
+    for (int j = 0; j < ns; ++j) {
+      const int c = S.energy_class[j];
+      auto it = std::find(seed_classes.begin(), seed_classes.end(), c);
+      energy_of[j] = static_cast<int>(it - seed_classes.begin());
+      if (it == seed_classes.end()) {
+        seed_classes.push_back(c);
+        inv.push_back(inverse_denominators(S, S.energies[c]));
       }
     }
 
-    u64 acc[kMaxVertices][L];
-    for (int k = 1; k <= ng_; ++k) {
-      const std::uint32_t n = S.len(std::min(k, ng_ - k));
-      const bool keep = k < ng_;
+    std::vector<Vec> psi(order + 1);
+    std::vector<std::uint32_t> len(order + 1, 0);
+    len[0] = S.len(0);
+    psi[0].assign(static_cast<std::size_t>(len[0]) * ns * L, 0);
+    for (int j = 0; j < ns; ++j) {
+      auto [onsite, bonds] = S.energies[S.energy_class[j]];
+      for (int l = 0; l < L; ++l) {
+        const Rational& v = lb_.v[l];
+        const u64 e = M(l).mul(M(l).from_int(static_cast<i64>(onsite) * v.den + v.num * bonds),
+                               M(l).inv(M(l).from_int(v.den)));
+        psi[0][(static_cast<std::size_t>(j) * ns + j) * L + l] = 1;
+        H[at(j, j, 0) + l] = e;
+      }
+    }
+
+    Vec acc(static_cast<std::size_t>(ns) * L);
+    std::vector<int> active, near;
+    for (int k = 1; k <= order; ++k) {
+      const std::uint32_t n = S.len(std::min(k, order - k));
+      const bool keep = k < order;
       len[k] = n;
-      if (keep) psi[k].assign(static_cast<std::size_t>(n) * nv * L, 0);
+      if (keep) psi[k].assign(static_cast<std::size_t>(n) * ns * L, 0);
       const Vec& prev = psi[k - 1];
       for (std::uint32_t t = 0; t < n; ++t) {
-        const std::uint8_t* sd = &S.seed_dist[static_cast<std::size_t>(t) * nv];
-        std::uint32_t active = 0;
-        for (int j = 0; j < nv; ++j) {
-          if (sd[j] <= k) active |= 1u << j;
+        active.clear();
+        near.clear();
+        for (int j = 0; j < ns; ++j) {
+          const int d = seed_dist(t, j);
+          if (d <= k) active.push_back(j);
+          if (d < k) near.push_back(j);
         }
-        if (!active) continue;
+        if (active.empty()) continue;
         std::uint32_t mend = S.move_begin[t];
         while (mend < S.move_begin[t + 1] && S.moves[mend].s < len[k - 1]) ++mend;
-        for (std::uint32_t a = active; a; a &= a - 1) {
-          const int j = __builtin_ctz(a);
+        for (int j : active) {
           u64 r[L] = {};
           for (std::uint32_t m = S.move_begin[t]; m < mend; ++m) {
             const Move& mv = S.moves[m];
             const u64 c = mv.fwd;
-            const u64* xj = &prev[(static_cast<std::size_t>(mv.s) * nv + j) * L];
+            const u64* xj = &prev[(static_cast<std::size_t>(mv.s) * ns + j) * L];
             for (int l = 0; l < L; ++l) r[l] += c * xj[l];
           }
-          std::copy_n(r, L, acc[j]);
+          std::copy_n(r, L, &acc[static_cast<std::size_t>(j) * L]);
         }
-        if (t < static_cast<std::uint32_t>(S.nseeds)) {
-          for (std::uint32_t a = active; a; a &= a - 1) {
-            const int j = __builtin_ctz(a);
-            for (int l = 0; l < L; ++l) H[at(t, j, k) + l] = M(l).reduce(acc[j][l]);
+        if (t < static_cast<std::uint32_t>(ns)) {
+          for (int j : active) {
+            for (int l = 0; l < L; ++l) H[at(t, j, k) + l] = M(l).reduce(acc[static_cast<std::size_t>(j) * L + l]);
           }
           continue;
         }
         if (!keep) continue;
-        const u64* iv = &inv[S.energy_class[t] * L];
-        for (std::uint32_t a = active; a; a &= a - 1) {
-          const int j = __builtin_ctz(a);
+        const std::uint16_t ec = S.energy_class[t];
+        for (int j : active) {
           u128 sub[L] = {};
           for (int m = 1; m < k; ++m) {
             if (t >= len[k - m]) continue;
-            const u64* row = &psi[k - m][static_cast<std::size_t>(t) * nv * L];
-            for (int i = 0; i < nv; ++i) {
-              if (sd[i] > k - m || P_.graph_dist[i * nv + j] > m) continue;
+            const u64* row = &psi[k - m][static_cast<std::size_t>(t) * ns * L];
+            for (int i : near) {
+              if (seed_dist(t, i) > k - m || seed_dist(i, j) > m) continue;
               const u64* h = &H[at(i, j, m)];
-              const u64* y = row + i * L;
+              const u64* y = row + static_cast<std::size_t>(i) * L;
               for (int l = 0; l < L; ++l) sub[l] += static_cast<u128>(h[l]) * y[l];
             }
           }
-          u64* dst = &psi[k][(static_cast<std::size_t>(t) * nv + j) * L];
-          for (int l = 0; l < L; ++l) {
-            dst[l] = M(l).mul(M(l).sub(M(l).reduce(acc[j][l]), M(l).reduce(sub[l])), iv[l]);
-          }
+          const u64* iv = &inv[energy_of[j]][ec * L];
+          const u64* a = &acc[static_cast<std::size_t>(j) * L];
+          u64* dst = &psi[k][(static_cast<std::size_t>(t) * ns + j) * L];
+          for (int l = 0; l < L; ++l) dst[l] = M(l).mul(M(l).sub(M(l).reduce(a[l]), M(l).reduce(sub[l])), iv[l]);
+          if (t == probe && probe_out) std::copy_n(dst, L, &(*probe_out)[(static_cast<std::size_t>(j) * order + k) * L]);
         }
       }
     }
-    for (int j = 0; j < nv; ++j) {
+  }
+
+  // Bloch effective Hamiltonian in the one-quasiparticle manifold {seed j},
+  // minus the cluster Mott energy.
+  void effective_hamiltonian(const Sector& S, Vec& H) {
+    bloch(S, ng_, H);
+    auto at = [&](int i, int j, int k) { return ((static_cast<std::size_t>(i) * nv_ + j) * (ng_ + 1) + k) * L; };
+    for (int j = 0; j < nv_; ++j) {
       for (int k = 0; k <= ng_; ++k) {
         for (int l = 0; l < L; ++l) H[at(j, j, k) + l] = M(l).sub(H[at(j, j, k) + l], out_.E[k * L + l]);
+      }
+    }
+  }
+
+  void vacuum_pairs() {
+    const int ndh = P_.in.ndh;
+    const Sector& S = P_.dh;
+    vac_pairs_.assign(static_cast<std::size_t>(S.nseeds) * (ndh + 1) * L, 0);
+    for (int a = 0; a < S.nseeds; ++a) {
+      auto it = P_.mott.index.find(S.states[a]);
+      if (it == P_.mott.index.end()) continue;
+      for (int k = 1; k <= ndh; ++k) {
+        if (it->second >= R_.len[k]) continue;
+        std::copy_n(&R_.v[k][static_cast<std::size_t>(it->second) * L], L,
+                    &vac_pairs_[(static_cast<std::size_t>(a) * (ndh + 1) + k) * L]);
+      }
+    }
+  }
+
+  // c[k] += sum_{m <= k} a[m] b[k - m] through x^n, per lane.
+  void convolve_add(const u64* a, const u64* b, int n, u64* c, bool subtract = false) const {
+    for (int k = 0; k <= n; ++k) {
+      u128 acc[L] = {};
+      for (int m = 0; m <= k; ++m) {
+        for (int l = 0; l < L; ++l) acc[l] += static_cast<u128>(a[m * L + l]) * b[(k - m) * L + l];
+      }
+      for (int l = 0; l < L; ++l) {
+        const u64 x = M(l).reduce(acc[l]);
+        c[k * L + l] = subtract ? M(l).sub(c[k * L + l], x) : M(l).add(c[k * L + l], x);
+      }
+    }
+  }
+
+  // H2 <- C H2 C^-1 for C = 1 - u alpha^T; see doublon_holon.
+  void vacuum_relative(int ns, int ndh, const Vec& alpha_in, Vec& H2) const {
+    const std::size_t w = static_cast<std::size_t>(ndh + 1) * L;
+    auto h = [&](int a, int b) { return &H2[(static_cast<std::size_t>(a) * ns + b) * w]; };
+    auto u = [&](int a) { return &vac_pairs_[static_cast<std::size_t>(a) * w]; };
+    Vec alpha(static_cast<std::size_t>(ns) * w, 0);  // alpha_a through x^(ndh - 1), zero at x^ndh
+    for (int a = 0; a < ns; ++a) {
+      std::copy_n(&alpha_in[static_cast<std::size_t>(a) * ndh * L], static_cast<std::size_t>(ndh) * L, &alpha[a * w]);
+    }
+    auto al = [&](int a) { return &alpha[static_cast<std::size_t>(a) * w]; };
+
+    Vec row(static_cast<std::size_t>(ns) * w, 0), col(static_cast<std::size_t>(ns) * w, 0), dot_au(w, 0), sc(w, 0);
+    for (int b = 0; b < ns; ++b) {
+      for (int a = 0; a < ns; ++a) convolve_add(al(a), h(a, b), ndh, &row[b * w]);  // alpha^T H2
+    }
+    for (int a = 0; a < ns; ++a) {
+      for (int b = 0; b < ns; ++b) convolve_add(h(a, b), u(b), ndh, &col[a * w]);   // H2 u
+      convolve_add(al(a), u(a), ndh, dot_au.data());                                  // alpha^T u
+    }
+    for (int a = 0; a < ns; ++a) convolve_add(al(a), &col[a * w], ndh, sc.data());   // alpha^T H2 u
+    // g = 1 / (1 - alpha^T u); alpha^T u starts at x^2.
+    Vec g(w, 0);
+    for (int l = 0; l < L; ++l) g[l] = 1;
+    for (int k = 1; k <= ndh; ++k) {
+      for (int l = 0; l < L; ++l) {
+        u128 acc = 0;
+        for (int m = 1; m <= k; ++m) acc += static_cast<u128>(dot_au[m * L + l]) * g[(k - m) * L + l];
+        g[k * L + l] = M(l).reduce(acc);
+      }
+    }
+    // v_a = g (H2 u - u s)_a
+    Vec v(static_cast<std::size_t>(ns) * w, 0), tmp(w);
+    for (int a = 0; a < ns; ++a) {
+      std::copy_n(&col[a * w], w, tmp.data());
+      convolve_add(u(a), sc.data(), ndh, tmp.data(), true);
+      convolve_add(g.data(), tmp.data(), ndh, &v[a * w]);
+    }
+    for (int a = 0; a < ns; ++a) {
+      for (int b = 0; b < ns; ++b) {
+        convolve_add(u(a), &row[b * w], ndh, h(a, b), true);
+        convolve_add(&v[a * w], al(b), ndh, h(a, b));
+      }
+    }
+  }
+
+  // Idh = (H2 - E) - (Hp - E) x 1 - 1 x (Hh - E) over the doublon-holon seeds,
+  // with Hp and Hh already holding their one-particle parts minus E.
+  //
+  // VACUUM-RELATIVE COORDINATES.  The Mott ground state Psi0 has components
+  // u = P2 Psi0 on the seeds themselves, so the Bloch coordinates P2 t of a
+  // pair eigenstate t = psi_A (x) Psi0_B, with the pair in one part A of a
+  // cluster, pick up u_B <vac|psi_A> on pairs in the other part.  Measured
+  // from the dressed vacuum instead, c(t) = P2 t - u <vac|t>, they factorise.
+  // With alpha_a = <vac|Omega|a>, the coordinates of the Bloch eigenvectors are
+  // C = 1 - u alpha^T, and the effective Hamiltonian in them is
+  //   C H2 C^-1 = H2 - u (alpha^T H2) + g (H2 u - u (alpha^T H2 u)) alpha^T,
+  // g = 1 / (1 - alpha^T u).
+  void doublon_holon() {
+    const int ndh = P_.in.ndh;
+    const Sector& S = P_.dh;
+    const int ns = S.nseeds;
+    if (ns == 0) return;
+    Vec H2, alpha;
+    // The correction starts at x^2 (u and alpha are O(x)); below that the
+    // sector does not reach the Mott state.
+    const auto vac = S.index.find(uniform_state(nv_, 1));
+    if (ndh >= 2) {
+      if (vac == S.index.end()) throw std::logic_error("Mott state missing from the doublon-holon sector");
+      bloch(S, ndh, H2, vac->second, &alpha);
+      vacuum_relative(ns, ndh, alpha, H2);
+    } else {
+      bloch(S, ndh, H2);
+    }
+    auto at = [&](int a, int b, int k) { return ((static_cast<std::size_t>(a) * ns + b) * (ndh + 1) + k) * L; };
+    for (int i2 = 0; i2 < nv_; ++i2) {
+      for (int j2 = 0; j2 < nv_; ++j2) {
+        const int a = P_.dh_seed[i2 * nv_ + j2];
+        if (a < 0) continue;
+        for (int i = 0; i < nv_; ++i) {
+          for (int j = 0; j < nv_; ++j) {
+            const int b = P_.dh_seed[i * nv_ + j];
+            if (b < 0) continue;
+            const std::size_t row = out_.dh_row(i2, j2, i, j);
+            for (int k = 0; k <= ndh; ++k) {
+              u64* dst = &out_.Idh[out_.dh_at(row, k)];
+              for (int l = 0; l < L; ++l) {
+                u64 x = H2[at(a, b, k) + l];
+                if (a == b) x = M(l).sub(x, out_.E[k * L + l]);
+                if (j2 == j) x = M(l).sub(x, out_.Hp[out_.pair_at(i2, i, k) + l]);
+                if (i2 == i) x = M(l).sub(x, out_.Hh[out_.pair_at(j2, j, k) + l]);
+                dst[l] = x;
+              }
+            }
+          }
+        }
       }
     }
   }
@@ -445,6 +617,7 @@ ClusterPlan plan_cluster(ClusterInput in) {
   if (nv < 1 || nv > kMaxVertices) throw std::invalid_argument("cluster size out of range");
   if (ng < 1 || nc < 0 || nc > ng) throw std::invalid_argument("bad series orders");
   if (ng > kMaxOrder) throw std::invalid_argument("series order exceeds kMaxOrder");
+  if (in.ndh > ng) throw std::invalid_argument("doublon-holon order exceeds ng");
   for (const auto& p : in.patterns) {
     if (p.size() != in.edges.size()) throw std::invalid_argument("pattern does not match edges");
   }
@@ -473,7 +646,19 @@ ClusterPlan plan_cluster(ClusterInput in) {
   plan.mott = build_sector(nv, in.edges, {mott}, dmax, false, cap);
   plan.particle = build_sector(nv, in.edges, doublons, ng / 2, true, cap);
   plan.hole = build_sector(nv, in.edges, holons, ng / 2, true, cap);
-  for (const Sector* sec : {&plan.mott, &plan.particle, &plan.hole}) {
+  if (in.ndh >= 0) {
+    std::vector<u64> pairs;
+    plan.dh_seed.assign(nv * nv, -1);
+    for (int i = 0; i < nv; ++i) {
+      for (int j = 0; j < nv; ++j) {
+        if (i == j) continue;
+        plan.dh_seed[i * nv + j] = static_cast<int>(pairs.size());
+        pairs.push_back(mott + site_unit(i) - site_unit(j));
+      }
+    }
+    plan.dh = build_sector(nv, in.edges, pairs, in.ndh / 2, true, cap);
+  }
+  for (const Sector* sec : {&plan.mott, &plan.particle, &plan.hole, &plan.dh}) {
     if (sec->size() > kMaxSectorStates) throw std::length_error("sector exceeds kMaxSectorStates");
   }
 
@@ -502,8 +687,8 @@ ClusterPlan plan_cluster(ClusterInput in) {
 
 std::vector<u64> RawSeries::lane(int l) const {
   std::vector<u64> flat;
-  flat.reserve((E.size() + Hp.size() + Hh.size() + corr.size() + chi.size() + m0.size()) / kLanes);
-  for (const auto* x : {&E, &Hp, &Hh, &corr, &chi, &m0}) {
+  flat.reserve((E.size() + Hp.size() + Hh.size() + corr.size() + chi.size() + m0.size() + Idh.size()) / kLanes);
+  for (const auto* x : {&E, &Hp, &Hh, &corr, &chi, &m0, &Idh}) {
     for (std::size_t i = l; i < x->size(); i += kLanes) flat.push_back((*x)[i]);
   }
   return flat;

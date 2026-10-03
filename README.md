@@ -32,6 +32,7 @@ Requires CMake >= 3.24, a C++20 compiler, FLINT 3, GMP and Boost headers
 lattices), so the usual -t model follows by x -> -x.  `--nsites s` gives Delta and S through x^(s-1), chi and m0 through
 x^(s-2).  `tools/q0_series.py SERIES.json` prints Delta(q=0), S(q=0) and
 E/N in the -t convention.
+`--dh 1` adds the doublon-holon interaction (below) through x^(s-2).
 `nlce_run geometry --nsites s` prints cluster, class and key counts;
 `nlce_run bench` times one cluster (see the header of `src/main.cpp`).
 
@@ -200,3 +201,47 @@ memory) the series at V/U = 0, per site, are
 The ratios of the S coefficients, about 15.6 at x^13, put the end of the
 n = 1 Mott lobe near t/U = 0.062 for -t hopping.
 
+## Doublon-holon interaction and the chiral exciton
+
+`run --dh 1` also expands the two-particle sector: the Bloch effective
+Hamiltonian H2 of the states with one doublon and one holon, minus its
+one-particle parts,
+
+    Idh = (H2 - E) - (Hp - E) x 1 - 1 x (Hh - E),
+
+which is nonzero only while the two are close.  The lattice sums give, at
+total momentum zero, Idh[(r', r)] from relative coordinate r = r_d - r_h to r',
+summed over the translation of the pair, through x^(s-2); `tools/exciton_series.py`
+adds the one-particle hopping and computes the energy of the chiral exciton,
+the adjacent pair in the staggered-current pattern that the current operator
+creates from the Mott state, as an exact series.  For V > 0 that state is
+non-degenerate in its symmetry sector at x = 0, at energy 1 - V.  A chiral
+Mott insulator appears where its energy reaches zero while the particle-hole
+gap Delta(K) is still open.
+
+Two points make the expansion cluster additive:
+
+* The doublon-holon states have unperturbed energy 1 or 1 - V, so their wave
+  operator solves the generalised Bloch equation, with one energy
+  denominator per seed (`bloch` in `cluster.cpp`; the one-particle sectors
+  are its special case of equal seed energies).
+* The Mott ground state has components u on the doublon-holon states
+  themselves, so plain Bloch coordinates of a pair in one part of a
+  cluster pick up pairs from the vacuum fluctuations of another part, and the
+  cumulants fail to vanish (at x^3 on six sites).  Coordinates measured from
+  the dressed vacuum, c(t) = P2 t - u <vac|t>, factorise; they are a rank-one
+  similarity transform of the Bloch effective Hamiltonian.
+
+Checks: every Idh cumulant of an s-site class vanishes exactly below x^(s-2)
+in every lane (s - 2 hops are needed to touch every site), and the occupation
+cap again holds (unit tests through s = 7); the two-site values follow by
+hand; on a 4 x 4 torus solved as one cluster, the chiral exciton energy from
+H2 equals brute-force Rayleigh-Schroedinger theory in the full Hilbert
+space, and away from wrap-around effects every relative-coordinate amplitude
+equals the lattice expansion's; and a 6 x 6 torus by brute force gives the
+lattice series' 4/5 - 6x - (68/21) x^2 + (184897/294) x^3 at V/U = 1/5.  (A 4 x 4 torus is not
+exact at x^2 for V > 0: a virtual pair three sites away interacts with the
+first across the wrap-around bond without hopping.)
+
+The cost is about six times that of a plain run (s = 9: 38 s, 0.8 GB
+against 7 s, 0.2 GB at one V/U; s = 10 at four V/U: 38 minutes, 4 GB).

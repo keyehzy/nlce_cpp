@@ -9,8 +9,10 @@
 #include "graph.hpp"
 #include "lattice.hpp"
 
+#include <boost/container_hash/hash.hpp>
 #include <boost/unordered/unordered_flat_map.hpp>
 
+#include <array>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -25,6 +27,12 @@ struct Embedding {
   std::int64_t fac;    // embedding weight per unit cell, times the point-group order
 };
 
+// One lattice realisation of a class, modulo translation and the point group.
+struct Realization {
+  int orbit = 0;          // translation classes in its point-group orbit
+  std::vector<Site> pos;  // pos[a] = site of canonical vertex a
+};
+
 struct ClassInfo {
   Cert cert;
   int nv = 0;
@@ -35,6 +43,7 @@ struct ClassInfo {
   std::int64_t mult = 0;  // embeddings per unit cell
   std::vector<Embedding> embeddings;  // site-pair embeddings by displacement
   std::vector<int> keys;  // decorated keys of this class
+  std::vector<Realization> realizations;
 };
 
 struct KeyInfo {
@@ -52,11 +61,22 @@ struct Geometry {
   std::vector<Site> displacements;  // canonical displacements, first-seen order
   boost::unordered_flat_map<Cert, int, CertHash> class_of;
   boost::unordered_flat_map<std::string, int> key_of;
+  // Doublon-holon keys (r', r), relative coordinates doublon - holon after and
+  // before a process, modulo the point group acting on both; see build_dh_keys.
+  std::vector<std::array<Site, 2>> dh_keys;
+  std::vector<int> dh_key_orbit;  // images of each key under the point group
+  boost::unordered_flat_map<std::array<int, 4>, int, boost::hash<std::array<int, 4>>> dh_key_of;
 
   int key_index(int cls, const Pattern& pattern) const;
+  int dh_key(Site after, Site before) const;
 };
 
 Geometry build_geometry(const Lattice& lat, int smax);
+
+// Indexes every pair of nonzero displacements within a realisation.  Defined
+// on Bravais lattices only, where a displacement fixes the pair of sites up
+// to translation.
+void build_dh_keys(Geometry& geo);
 
 // Lexicographically smallest image of `signs` (one per class edge, oriented
 // i < j) over the class automorphisms and a global sign flip.

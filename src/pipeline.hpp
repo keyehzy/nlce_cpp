@@ -17,23 +17,29 @@
 namespace nlce {
 
 // Flattened lattice series of one lane:
-//   EN[k], Hp[cd][k], Hh[cd][k], S[cd][k], chi[k'], m0[k']
-// with k <= ng, k' <= nc, cd over Geometry::displacements.
+//   EN[k], Hp[cd][k], Hh[cd][k], S[cd][k], chi[k'], m0[k'], Idh[key][k'']
+// with k <= ng, k' <= nc, k'' <= ndh, cd over Geometry::displacements and key
+// over Geometry::dh_keys.  Idh[(r', r)] is the doublon-holon interaction at
+// total momentum zero, from relative coordinate r to r', summed over the
+// translation of the pair.
 struct SeriesLayout {
   int ng = 0, nc = 0, ncd = 0;
+  int ndh = -1, nkdh = 0;
   std::size_t en() const { return 0; }
   std::size_t hp() const { return en() + (ng + 1); }
   std::size_t hh() const { return hp() + static_cast<std::size_t>(ncd) * (ng + 1); }
   std::size_t s() const { return hh() + static_cast<std::size_t>(ncd) * (ng + 1); }
   std::size_t chi() const { return s() + static_cast<std::size_t>(ncd) * (ng + 1); }
   std::size_t m0() const { return chi() + (nc + 1); }
-  std::size_t size() const { return m0() + (nc + 1); }
+  std::size_t dh() const { return m0() + (nc + 1); }
+  std::size_t size() const { return dh() + (ndh >= 0 ? static_cast<std::size_t>(nkdh) * (ndh + 1) : 0); }
 
   // Perturbative order of coefficient i.
   int order(std::size_t i) const {
     if (i < hp()) return static_cast<int>(i);
     if (i < chi()) return static_cast<int>((i - hp()) % (ng + 1));
-    return static_cast<int>(i < m0() ? i - chi() : i - m0());
+    if (i < dh()) return static_cast<int>(i < m0() ? i - chi() : i - m0());
+    return static_cast<int>((i - dh()) % (ndh + 1));
   }
 };
 
@@ -41,6 +47,7 @@ struct PassOptions {
   int threads = 1;
   bool verbose = true;
   bool cap_largest = true;  // largest classes in the occupation-capped model (exact; see pipeline.cpp)
+  int ndh = -1;             // order of the doublon-holon interaction; negative: off (needs build_dh_keys)
 };
 
 // Returns, per lane, the lattice series residues in SeriesLayout order.

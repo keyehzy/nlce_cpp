@@ -18,9 +18,11 @@ void json_list(std::ostream& os, const std::vector<std::string>& v, std::size_t 
 }  // namespace
 
 void write_lattice_json(std::ostream& os, const Lattice& lattice, int nsites, int ng, int nc,
-                        const std::vector<Site>& displacements, const LatticeSeries& series, int check_primes) {
+                        const std::vector<Site>& displacements, int ndh,
+                        const std::vector<std::array<Site, 2>>& dh_keys, const LatticeSeries& series,
+                        int check_primes) {
   const Reconstruction& rec = series.rec;
-  const SeriesLayout lay{ng, nc, static_cast<int>(displacements.size())};
+  const SeriesLayout lay{ng, nc, static_cast<int>(displacements.size()), ndh, static_cast<int>(dh_keys.size())};
   os << "{\n\"lattice\": \"" << lattice.name << "\",\n\"nsites\": " << nsites << ",\n\"v\": \""
      << to_string(series.v) << "\",\n\"order_gap\": " << ng;
   if (lattice.currents) os << ",\n\"order_chi\": " << nc;
@@ -49,10 +51,24 @@ void write_lattice_json(std::ostream& os, const Lattice& lattice, int nsites, in
     os << ",\n\"m0\": ";
     json_list(os, rec.values, lay.m0(), nc + 1);
   }
+  if (ndh >= 0) {
+    os << ",\n\"order_dh\": " << ndh << ",\n\"dh_keys\": [";
+    for (std::size_t q = 0; q < dh_keys.size(); ++q) {
+      const auto& [r2, r] = dh_keys[q];
+      os << (q ? "," : "") << '[' << r2.a << ',' << r2.b << ',' << r.a << ',' << r.b << ']';
+    }
+    os << "],\n\"Idh\": [";
+    for (std::size_t q = 0; q < dh_keys.size(); ++q) {
+      os << (q ? ",\n  " : "");
+      json_list(os, rec.values, lay.dh() + q * (ndh + 1), ndh + 1);
+    }
+    os << ']';
+  }
   os << "\n}\n";
 }
 
-void write_cluster_json(std::ostream& os, int nv, int ng, int nc, int npatterns, const ClusterSeries& series) {
+void write_cluster_json(std::ostream& os, int nv, int ng, int nc, int npatterns, int ndh,
+                        const ClusterSeries& series) {
   const std::vector<std::string>& values = series.rec.values;
   std::size_t at = 0;
   auto emit = [&](const char* name, int blocks, int len) {
@@ -70,6 +86,7 @@ void write_cluster_json(std::ostream& os, int nv, int ng, int nc, int npatterns,
   emit("corr", nv * nv, ng + 1);
   emit("chi", npatterns, nc + 1);
   emit("m0", npatterns, nc + 1);
+  if (ndh >= 0) emit("Idh", nv * nv * nv * nv, ndh + 1);
   os << ",\n\"primes\": " << series.primes << "\n}\n";
 }
 

@@ -1,6 +1,7 @@
 // Unit tests for the arithmetic, labelling and geometry layers.  The
 // end-to-end checks against the Python implementation live in tools/.
 #include "cluster.hpp"
+#include "driver.hpp"
 #include "geometry.hpp"
 #include "graph.hpp"
 #include "modp.hpp"
@@ -322,6 +323,48 @@ void test_occupation_cap() {
   check(capped == full, "occupation-capped largest classes, s<=6");
 }
 
+// Doublon-holon interaction.  On two sites at V/U = 1/4 an adjacent pair
+// gains -V at x^0; at x^2 it annihilates into the Mott state, which returns it
+// in place or swapped (2 x^2 / (1 - V) each), against the one-particle
+// self-energies and the Mott energy.  On larger clusters the interaction must
+// be cluster additive (run_pass checks every cumulant below x^(s-2)), and the
+// largest classes may again be computed with two bosons per site.
+void test_doublon_holon() {
+  ClusterInput in{2, {{0, 1}}, {}, 2, 0};
+  in.ndh = 2;
+  const ClusterSeries two = cluster_series(plan_cluster(in), Rational{1, 4}, 2);
+  // Rows ((i'*2 + j')*2 + i)*2 + j after E, Hp, Hh, corr (4 pairs each), chi, m0.
+  const std::size_t base = 3 + 3 * 4 * 3;
+  auto idh = [&](int row, int k) { return two.rec.values[base + row * 3 + k]; };
+  check(idh(5, 0) == "-1/4" && idh(5, 1) == "0" && idh(5, 2) == "-2/3", "adjacent doublon-holon pair, two sites");
+  check(idh(6, 0) == "0" && idh(6, 2) == "8/3", "doublon-holon swap, two sites");
+
+  Geometry geo = build_geometry(triangular_lattice(), 7);
+  build_dh_keys(geo);
+  std::vector<LaneSpec> lanes;
+  for (u64 p : moduli(2)) {
+    lanes.push_back({{0, 1}, p});
+    lanes.push_back({{1, 4}, p});
+    lanes.push_back({{3, 10}, p});
+  }
+  PassOptions opts;
+  opts.threads = 2;
+  opts.verbose = false;
+  opts.ndh = 5;
+  std::vector<std::vector<u64>> capped, full;
+  bool ok = true;
+  try {
+    capped = run_pass(geo, 6, 5, lanes, opts);
+    opts.cap_largest = false;
+    full = run_pass(geo, 6, 5, lanes, opts);
+  } catch (const std::exception& e) {
+    ok = false;
+    std::fprintf(stderr, "%s\n", e.what());
+  }
+  check(ok, "doublon-holon cumulant cancellation, s<=7");
+  check(ok && capped == full, "doublon-holon interaction with occupation-capped largest classes, s<=7");
+}
+
 // Inputs beyond the overflow budget must be rejected, not computed wrongly.
 void test_limits() {
   bool threw = false;
@@ -347,6 +390,7 @@ int main() {
   test_point_group_reduction();
   test_small_pass();
   test_occupation_cap();
+  test_doublon_holon();
   test_limits();
   if (failures) {
     std::fprintf(stderr, "%d failure(s)\n", failures);

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <map>
+#include <set>
 #include <stdexcept>
 #include <tuple>
 
@@ -93,6 +94,9 @@ Geometry build_geometry(const Lattice& lat, int smax) {
       ClassInfo& cls = geo.classes[c];
       const int orbit = site_orbit_size(lat, sites);
       cls.mult += orbit;
+      Realization real{orbit, std::vector<Site>(n)};
+      for (int u = 0; u < n; ++u) real.pos[canon.perm[u]] = sites[u];
+      cls.realizations.push_back(std::move(real));
 
       for (int u = 0; u < n; ++u) {
         for (int w = 0; w < n; ++w) {
@@ -133,6 +137,45 @@ Geometry build_geometry(const Lattice& lat, int smax) {
     }
   }
   return geo;
+}
+
+int Geometry::dh_key(Site after, Site before) const {
+  auto it = dh_key_of.find({after.a, after.b, before.a, before.b});
+  if (it == dh_key_of.end()) throw std::logic_error("doublon-holon key missing from geometry");
+  return it->second;
+}
+
+void build_dh_keys(Geometry& geo) {
+  const Lattice& lat = *geo.lattice;
+  if (lat.cell_sites() != 1) throw std::invalid_argument("doublon-holon keys need a Bravais lattice");
+  std::set<Site> disp;
+  for (const auto& cls : geo.classes) {
+    for (const auto& real : cls.realizations) {
+      for (const auto& p : real.pos) {
+        for (const auto& q : real.pos) {
+          if (!(p == q)) disp.insert(q - p);
+        }
+      }
+    }
+  }
+  geo.dh_keys.clear();
+  geo.dh_key_orbit.clear();
+  geo.dh_key_of.clear();
+  for (const Site r2 : disp) {
+    for (const Site r : disp) {
+      if (geo.dh_key_of.count({r2.a, r2.b, r.a, r.b})) continue;
+      std::set<std::array<int, 4>> images;
+      for (const auto& g : lat.group) {
+        const Site x = g(r2), y = g(r);
+        images.insert({x.a, x.b, y.a, y.b});
+      }
+      const auto& c = *images.begin();
+      const int key = static_cast<int>(geo.dh_keys.size());
+      geo.dh_keys.push_back({Site{c[0], c[1]}, Site{c[2], c[3]}});
+      geo.dh_key_orbit.push_back(static_cast<int>(images.size()));
+      for (const auto& im : images) geo.dh_key_of.emplace(im, key);
+    }
+  }
 }
 
 std::vector<SubCluster> subclusters(const Geometry& geo, int cls_index) {

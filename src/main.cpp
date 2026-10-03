@@ -4,15 +4,17 @@
 // triangular lattice.
 //
 //   nlce_run geometry --nsites N [--lattice L]
-//   nlce_run run --nsites N --v 0,1/20,1/4 --out DIR [--lattice L] [--threads T] [--primes K]
-//   nlce_run cluster --nv N --edges 0-1,1-2 --ng G --nc C --v 1/5 [--pattern +-] ...
+//   nlce_run run --nsites N --v 0,1/20,1/4 --out DIR [--lattice L] [--threads T] [--primes K] [--dh 1]
+//   nlce_run cluster --nv N --edges 0-1,1-2 --ng G --nc C --v 1/5 [--pattern +-] [--ndh D] ...
 //     ("none" stands for an empty edge list or pattern)
 //   nlce_run bench --nv N --edges ... --ng G --nc C [--pattern ...] [--v 1/5] [--reps 3]
 //
 // The lattice is chain, square or triangular (the default).  `run` writes one
 // JSON file per V/U with every series coefficient as an exact rational;
 // tools/to_pickles.py converts them to the series/*.pkl format.  chi and m0
-// are computed on the triangular lattice only.
+// are computed on the triangular lattice only.  --dh 1 adds the doublon-holon
+// interaction Idh through x^(N-2) (Bravais lattices), read by
+// tools/exciton_series.py.
 #include "cluster.hpp"
 #include "driver.hpp"
 #include "geometry.hpp"
@@ -87,6 +89,7 @@ ClusterInput parse_cluster_input(const Args& args) {
   in.nv = args.integer("nv", 0);
   in.ng = args.integer("ng", 0);
   in.nc = args.integer("nc", 0);
+  in.ndh = args.integer("ndh", -1);
   for (const auto& e : split(args.get("edges", "none"), ',')) {
     if (e == "none") continue;
     const auto parts = split(e, '-');
@@ -133,16 +136,18 @@ int cmd_run(const Args& args) {
   opts.check_primes = args.integer("check", 2);
   opts.threads = args.integer("threads", static_cast<int>(std::max(1u, std::thread::hardware_concurrency())));
   const int ng = nsites - 1, nc = lat.currents ? nsites - 2 : 0;
+  if (args.integer("dh", 0)) opts.ndh = nsites - 2;
 
   const auto t0 = std::chrono::steady_clock::now();
-  const Geometry geo = build_geometry(lat, nsites);
+  Geometry geo = build_geometry(lat, nsites);
+  if (opts.ndh >= 0) build_dh_keys(geo);
   std::fprintf(stderr, "%s geometry: %zu classes, %zu keys, %zu displacements (%.1fs)\n", lat.name.c_str(),
                geo.classes.size(), geo.keys.size(), geo.displacements.size(), since(t0));
 
   lattice_series(geo, ng, nc, vs, opts, [&](const LatticeSeries& series) {
     const auto path = out_dir / ("series_s" + std::to_string(nsites) + "_v" + file_tag(series.v) + ".json");
     std::ofstream os(path);
-    write_lattice_json(os, lat, nsites, ng, nc, geo.displacements, series, opts.check_primes);
+    write_lattice_json(os, lat, nsites, ng, nc, geo.displacements, opts.ndh, geo.dh_keys, series, opts.check_primes);
     std::fprintf(stderr, "  V/U=%s: reconstructed from %d primes (%d bits) -> %s\n", to_string(series.v).c_str(),
                  series.primes, series.rec.max_bits, path.string().c_str());
   });
@@ -154,7 +159,7 @@ int cmd_cluster(const Args& args) {
   const ClusterPlan plan = plan_cluster(parse_cluster_input(args));
   const ClusterSeries series = cluster_series(plan, parse_rational(args.get("v", "0")), 2);
   const ClusterInput& in = plan.in;
-  write_cluster_json(std::cout, in.nv, in.ng, in.nc, static_cast<int>(in.patterns.size()), series);
+  write_cluster_json(std::cout, in.nv, in.ng, in.nc, static_cast<int>(in.patterns.size()), in.ndh, series);
   return 0;
 }
 

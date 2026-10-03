@@ -2,6 +2,8 @@
 
 #include "cluster.hpp"
 
+#include <boost/unordered/unordered_flat_map.hpp>
+
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -73,22 +75,34 @@ enum KeyRow { kChiRow = 0, kM0Row = 1, kKeyRows = 2 };
 // arc or the b^dag b insertion need not be a cluster edge, and raises m by at
 // most one, to at most s.  The cumulants therefore vanish below these orders,
 // which check_vanishing verifies exactly in every lane.
+//
+// Idh from (doublon i, holon j) to (i', j') moves one boson net from i to i'
+// and one from j' to j.  Every site other than i, j, i', j' receives an arc,
+// as do i' when i' != i and j when j != j', which makes at least s - 2 arcs in
+// all three cases (|{i, j, i', j'}| = 2, 3, 4).  An adjacent pair interacts
+// through V without any hop, so a two-site class starts at order 0.
 struct LeadingOrders {
   int energy;   // E
   int pair;     // Hp, Hh, corr
   int current;  // chi, m0
+  int dh;       // Idh
 };
 
 LeadingOrders leading_orders(const ClassInfo& cls) {
   const int s = cls.nv, m = cls.matching;
-  return {2 * s - m, std::max(s - 1, 2 * s - 2 - m), 2 * s - 2 - m};
+  return {2 * s - m, std::max(s - 1, 2 * s - 2 - m), 2 * s - 2 - m, std::max(0, s - 2)};
 }
+
+// Rows of a class's Idh weights: dh_row(i', j', i, j) over all vertices.
+int dh_rows(int nv) { return nv * nv * nv * nv; }
 
 // OCCUPATION CAP.  In the same picture, a term of order k <= ng has at most
 // k + 1 arcs (k + 2 <= nc + 2 for chi and m0), and each of the s sites
 // receives at least one, so none receives more than A - s + 1, where
 // A = max(ng + 1, nc + 2).  The doublon's seed receives the closing arc, so no
-// occupation ever exceeds A - s + 2.  The terms that touch every site are
+// occupation ever exceeds A - s + 2.  For Idh of order k, the s - 2 required
+// arcs leave at most k - s + 2 for any one site, which starts with at most
+// two bosons, so A includes ndh + 2.  The terms that touch every site are
 // therefore the same in the model capped at A - s + 2 bosons per site, which
 // is again local, and its cumulants agree with the full model's through ng
 // and nc.  For the largest classes, with ng = smax - 1 and nc = smax - 2, the
@@ -103,25 +117,28 @@ struct Hierarchy {
   int top = 0;               // largest class size computed
   std::vector<Weights> class_w;
   std::vector<Weights> key_w;
+  std::vector<Weights> dh_w;
 };
 
 class Pass {
 public:
   Pass(const Geometry& geo, int ng, int nc, const std::vector<LaneSpec>& lanes, const PassOptions& opts)
       : geo_(geo), ng_(ng), nc_(nc), lanes_(lanes), opts_(opts), nl_(lanes.size()) {
-    layout_ = {ng, nc, static_cast<int>(geo.displacements.size())};
+    layout_ = {ng, nc, static_cast<int>(geo.displacements.size()), opts.ndh, static_cast<int>(geo.dh_keys.size())};
+    if (opts.ndh >= 0 && geo.dh_keys.empty()) throw std::logic_error("doublon-holon keys not built");
     for (std::size_t b = 0; b < nl_; b += L) blocks_.push_back(make_lane_block(lanes_, b));
     const int top = geo.smax;
-    const int cap = std::clamp(std::max(ng + 1, nc + 2) - top + 2, 2, kMaxOccupation);
+    const int cap = std::clamp(std::max({ng + 1, nc + 2, opts.ndh + 2}) - top + 2, 2, kMaxOccupation);
     if (opts.cap_largest && cap < kMaxOccupation) {
-      hier_.push_back({kMaxOccupation, 1, top - 1, {}, {}});
-      hier_.push_back({cap, top, top, {}, {}});
+      hier_.push_back({kMaxOccupation, 1, top - 1, {}, {}, {}});
+      hier_.push_back({cap, top, top, {}, {}, {}});
     } else {
-      hier_.push_back({kMaxOccupation, 1, top, {}, {}});
+      hier_.push_back({kMaxOccupation, 1, top, {}, {}, {}});
     }
     for (Hierarchy& h : hier_) {
       h.class_w.resize(geo.classes.size());
       h.key_w.resize(geo.keys.size());
+      h.dh_w.resize(geo.classes.size());
     }
   }
 
@@ -206,11 +223,13 @@ private:
     const ClassInfo& cls = geo_.classes[c];
     const int s = cls.nv;
     const LeadingOrders lead = leading_orders(cls);
-    // Cumulants that vanish through ng or nc are neither computed nor stored.
+    // Cumulants that vanish through ng, nc or ndh are neither computed nor stored.
     const bool decorate = lead.current <= nc_;
-    if (lead.pair > ng_ && !decorate) return;
+    const int ndh = opts_.ndh;
+    const bool dh = s >= 2 && lead.dh <= ndh;
+    if (lead.pair > ng_ && !decorate && !dh) return;
 
-    ClusterInput input{cls.nv, cls.edges, {}, ng_, nc_, h.cap};
+    ClusterInput input{cls.nv, cls.edges, {}, ng_, nc_, h.cap, dh ? ndh : -1};
     if (decorate) {
       for (int key : cls.keys) input.patterns.push_back(geo_.keys[key].pattern);
     }
@@ -227,7 +246,9 @@ private:
     if (keep) {
       h.class_w[c].reset(ClassRows{s * s}.count(), lead.pair, ng_, nl_);
       for (int key : cls.keys) h.key_w[key].reset(kKeyRows, lead.current, nc_, nl_);
+      if (dh) h.dh_w[c].reset(dh_rows(s), lead.dh, ndh, nl_);
     }
+    const std::vector<DhEmbedding> dh_emb = dh && s >= h.lo ? dh_embeddings(cls) : std::vector<DhEmbedding>{};
 
     RawSeries raw;
     for (std::size_t b = 0; b < blocks_.size(); ++b) {
@@ -238,8 +259,45 @@ private:
       subtract_subclusters(h, blk, g0, subs, subkeys, raw);
       check_vanishing(blk, raw, c, lead);
       if (keep) store_weights(h, blk, g0, c, raw);
-      if (s >= h.lo) accumulate(blk, g0, raw, cls, lead, totals);
+      if (s >= h.lo) accumulate(blk, g0, raw, cls, lead, dh_emb, totals);
     }
+  }
+
+  // Lattice weights of the class's Idh rows: per row and key (r', r), the
+  // realisations' orbits times |G| / |orbit of the key|, as for Embedding.
+  struct DhEmbedding {
+    std::uint32_t row;
+    int key;
+    std::int64_t fac;
+  };
+
+  std::vector<DhEmbedding> dh_embeddings(const ClassInfo& cls) const {
+    const int n = cls.nv;
+    const std::int64_t order = static_cast<std::int64_t>(geo_.lattice->group.size());
+    boost::unordered_flat_map<std::uint64_t, std::int64_t> acc;
+    std::vector<int> key(n * n * n * n);
+    for (const Realization& real : cls.realizations) {
+      for (int i2 = 0; i2 < n; ++i2) {
+        for (int j2 = 0; j2 < n; ++j2) {
+          if (i2 == j2) continue;
+          const Site after = real.pos[i2] - real.pos[j2];
+          for (int i = 0; i < n; ++i) {
+            for (int j = 0; j < n; ++j) {
+              if (i == j) continue;
+              const int k = geo_.dh_key(after, real.pos[i] - real.pos[j]);
+              const std::uint64_t row = ((static_cast<std::uint64_t>(i2) * n + j2) * n + i) * n + j;
+              acc[row << 32 | static_cast<std::uint32_t>(k)] += real.orbit * order / geo_.dh_key_orbit[k];
+            }
+          }
+        }
+      }
+    }
+    std::vector<DhEmbedding> out;
+    out.reserve(acc.size());
+    for (auto [rk, fac] : acc) {
+      out.push_back({static_cast<std::uint32_t>(rk >> 32), static_cast<int>(rk & 0xffffffffu), fac});
+    }
+    return out;
   }
 
   // Hp carries the unperturbed doublon energy E_D = 1 on its order-0
@@ -274,6 +332,27 @@ private:
         }
       }
     }
+    if (raw.ndh >= 0) {
+      for (const auto& sub : subs) {
+        const Weights& w = h.dh_w[sub.cls];
+        const int n2 = static_cast<int>(sub.verts.size());
+        for (int k = w.k0(); k < w.end(); ++k) {
+          for (int a = 0; a < n2; ++a) {
+            for (int b = 0; b < n2; ++b) {
+              if (a == b) continue;
+              for (int c = 0; c < n2; ++c) {
+                for (int d = 0; d < n2; ++d) {
+                  if (c == d) continue;
+                  const int q = ((sub.map[a] * n2 + sub.map[b]) * n2 + sub.map[c]) * n2 + sub.map[d];
+                  const std::size_t row = raw.dh_row(sub.verts[a], sub.verts[b], sub.verts[c], sub.verts[d]);
+                  subtract(blk, &raw.Idh[raw.dh_at(row, k)], w.at(q, k, g0));
+                }
+              }
+            }
+          }
+        }
+      }
+    }
     for (std::size_t q = 0; q < subkeys.size(); ++q) {
       const int pat = static_cast<int>(q);
       for (std::size_t i = 0; i < subs.size(); ++i) {
@@ -301,6 +380,12 @@ private:
           store(blk, &raw.Hh[raw.pair_at(u, v, k)], cw.at(rows.Hh(q), k, g0));
           store(blk, &raw.corr[raw.pair_at(u, v, k)], cw.at(rows.corr(q), k, g0));
         }
+      }
+    }
+    if (raw.ndh >= 0) {
+      Weights& dw = h.dh_w[c];
+      for (int k = dw.k0(); k < dw.end(); ++k) {
+        for (int q = 0; q < dh_rows(nv); ++q) store(blk, &raw.Idh[raw.dh_at(q, k)], dw.at(q, k, g0));
       }
     }
     for (std::size_t q = 0; q < cls.keys.size(); ++q) {
@@ -342,6 +427,12 @@ private:
         ok = zero(&raw.chi[raw.pattern_at(q, k)]) && zero(&raw.m0[raw.pattern_at(q, k)]);
       }
     }
+    if (raw.ndh >= 0) {
+      const std::size_t rows = static_cast<std::size_t>(dh_rows(nv));
+      for (std::size_t q = 0; q < rows && ok; ++q) {
+        for (int k = 0; k < std::min(lead.dh, raw.ndh + 1) && ok; ++k) ok = zero(&raw.Idh[raw.dh_at(q, k)]);
+      }
+    }
     if (!ok) {
       throw std::logic_error("cluster cumulant does not vanish below its leading order (class " + std::to_string(c) +
                              ", " + std::to_string(nv) + " sites)");
@@ -349,7 +440,8 @@ private:
   }
 
   void accumulate(const LaneBlock& blk, std::size_t g0, const RawSeries& raw, const ClassInfo& cls,
-                  const LeadingOrders& lead, std::vector<u64>& totals) const {
+                  const LeadingOrders& lead, const std::vector<DhEmbedding>& dh_emb,
+                  std::vector<u64>& totals) const {
     const int k0 = lead.pair, k0c = lead.current;
     const std::size_t width = layout_.size();
     for (int l = 0; l < blk.count; ++l) {
@@ -382,6 +474,14 @@ private:
           ch = m.add(ch, m.mul(km2, raw.chi[raw.pattern_at(q, k) + l]));
           u64& mm = tot[layout_.m0() + k];
           mm = m.add(mm, m.mul(km, raw.m0[raw.pattern_at(q, k) + l]));
+        }
+      }
+      for (const DhEmbedding& e : dh_emb) {
+        const u64 f = m.mul(m.from_int(e.fac), inv_order);
+        const std::size_t off = layout_.dh() + static_cast<std::size_t>(e.key) * (raw.ndh + 1);
+        for (int k = lead.dh; k <= raw.ndh; ++k) {
+          u64& x = tot[off + k];
+          x = m.add(x, m.mul(f, raw.Idh[raw.dh_at(e.row, k) + l]));
         }
       }
     }

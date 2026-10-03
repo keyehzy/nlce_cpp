@@ -17,6 +17,7 @@ struct DriverOptions {
   int threads = 1;
   int fixed_primes = 0;  // > 0: use exactly this many and fail if too few
   int check_primes = 2;
+  int ndh = -1;  // order of the doublon-holon interaction; negative: off
   bool verbose = true;
 };
 
