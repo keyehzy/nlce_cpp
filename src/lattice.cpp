@@ -94,7 +94,7 @@ const Lattice& square_lattice() {
 
 const Lattice& triangular_lattice() {
   static const Lattice lat{.name = "triangular", .dirs = {{1, 0}, {0, 1}, {1, -1}}, .group = d6_group(),
-                           .currents = true};
+                           .current = Current::staggered};
   return lat;
 }
 
@@ -151,6 +151,62 @@ int sublattice(Site s) { return ((2 * s.a + s.b) % 3 + 3) % 3; }
 
 int current_sign(Site p, Site q) { return ((sublattice(q) - sublattice(p)) % 3 + 3) % 3 == 1 ? 1 : -1; }
 
+namespace {
+
+// Whether the triangle of the kagome bond {p, q} points up.  Of the two
+// triangles of the triangular lattice on the bond, the up one with corners
+// u, u + (1, 0), u + (0, 1) and the down one with corners u + (1, 0),
+// u + (0, 1), u + (1, 1), exactly one avoids the hexagon centres.
+bool kagome_up_triangle(const Lattice& lat, Site p, Site q) {
+  Site u = p, d = q - p;
+  if (!(d == Site{1, 0} || d == Site{0, 1} || d == Site{1, -1})) {
+    u = q;
+    d = p - q;
+  }
+  Site up_third;
+  if (d == Site{1, 0}) {
+    up_third = u + Site{0, 1};
+  } else if (d == Site{0, 1}) {
+    up_third = u + Site{1, 0};
+  } else if (d == Site{1, -1}) {
+    up_third = u + Site{0, -1};
+  } else {
+    throw std::invalid_argument("not a bond");
+  }
+  return lat.is_site(up_third);
+}
+
+}  // namespace
+
+int current_sign(const Lattice& lat, Site p, Site q) {
+  switch (lat.current) {
+    case Current::staggered:
+      return current_sign(p, q);
+    case Current::uniform:
+      // The staggered pattern circulates clockwise around up triangles and
+      // anticlockwise around down ones; reversing it on the up triangles
+      // makes every triangle anticlockwise.
+      return kagome_up_triangle(lat, p, q) ? -current_sign(p, q) : current_sign(p, q);
+    case Current::none:
+      break;
+  }
+  throw std::logic_error("lattice has no current pattern");
+}
+
+Lattice with_current(const Lattice& lat, const std::string& pattern) {
+  Lattice out = lat;
+  if (pattern == "none") {
+    out.current = Current::none;
+  } else if (pattern == "staggered" && (lat.name == "triangular" || lat.name == "kagome")) {
+    out.current = Current::staggered;
+  } else if (pattern == "uniform" && lat.name == "kagome") {
+    out.current = Current::uniform;
+  } else {
+    throw std::invalid_argument("current pattern " + pattern + " is not defined on the " + lat.name + " lattice");
+  }
+  return out;
+}
+
 std::vector<Bond> induced_bonds(const Lattice& lat, const std::vector<Site>& sites) {
   std::set<Site> members(sites.begin(), sites.end());
   std::vector<Bond> out;
@@ -178,6 +234,24 @@ int site_orbit_size(const Lattice& lat, const std::vector<Site>& sites) {
   for (const auto& m : lat.group) forms.insert(normalised_image(lat, m, sites));
   return static_cast<int>(forms.size());
 }
+
+namespace {
+
+std::set<std::pair<Site, Site>> pair_images(const Lattice& lat, Site p, Site q) {
+  std::set<std::pair<Site, Site>> images;
+  for (const auto& m : lat.group) {
+    const Site x = m(p), y = m(q);
+    const Site shift = *lat.anchors[lat.residue(x)] - x;
+    images.emplace(x + shift, y + shift);
+  }
+  return images;
+}
+
+}  // namespace
+
+std::pair<Site, Site> canonical_pair(const Lattice& lat, Site p, Site q) { return *pair_images(lat, p, q).begin(); }
+
+int pair_orbit_size(const Lattice& lat, Site p, Site q) { return static_cast<int>(pair_images(lat, p, q).size()); }
 
 std::vector<std::vector<std::vector<Site>>> enumerate_site_clusters(const Lattice& lat, int smax) {
   if (smax < 1) throw std::invalid_argument("smax must be positive");

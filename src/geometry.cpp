@@ -70,7 +70,9 @@ Geometry build_geometry(const Lattice& lat, int smax) {
   const auto reps = enumerate_site_clusters(lat, smax);
   const std::int64_t order = static_cast<std::int64_t>(lat.group.size());
   std::map<Site, int> disp_index;
-  std::vector<std::map<std::tuple<int, int, int>, std::int64_t>> emb(0);
+  std::map<std::pair<Site, Site>, int> pair_index;
+  const bool resolve_pairs = lat.cell_sites() > 1;
+  std::vector<std::map<std::tuple<int, int, int>, std::int64_t>> emb(0), pair_emb(0);
 
   for (int s = 1; s <= smax; ++s) {
     geo.cluster_counts[s] = static_cast<int>(reps[s].size());
@@ -89,6 +91,7 @@ Geometry build_geometry(const Lattice& lat, int smax) {
       if (inserted) {
         geo.classes.push_back(make_class(canon.cert));
         emb.emplace_back();
+        pair_emb.emplace_back();
       }
       const int c = it->second;
       ClassInfo& cls = geo.classes[c];
@@ -106,14 +109,22 @@ Geometry build_geometry(const Lattice& lat, int smax) {
           if (fresh) geo.displacements.push_back(cd);
           emb[c][{dit->second, canon.perm[u], canon.perm[w]}] +=
               static_cast<std::int64_t>(orbit) * order / displacement_orbit_size(lat, d);
+          if (!resolve_pairs) continue;
+          const auto cp = canonical_pair(lat, sites[u], sites[w]);
+          auto [pit, fresh_pair] = pair_index.try_emplace(cp, static_cast<int>(geo.pairs.size()));
+          if (fresh_pair) {
+            geo.pairs.push_back({cp.first, cp.second});
+            geo.pair_counts.push_back(pair_orbit_size(lat, sites[u], sites[w]));
+          }
+          pair_emb[c][{pit->second, canon.perm[u], canon.perm[w]}] += orbit;
         }
       }
-      if (!lat.currents) continue;
+      if (!lat.currents()) continue;
 
       Pattern signs(cls.edges.size());
       for (const auto& [p, q] : bonds) {
         int i = canon.perm[pos(p)], j = canon.perm[pos(q)];
-        int sgn = current_sign(p, q);
+        int sgn = current_sign(lat, p, q);
         if (i > j) {
           std::swap(i, j);
           sgn = -sgn;
@@ -135,25 +146,42 @@ Geometry build_geometry(const Lattice& lat, int smax) {
       auto [cd, a, b] = k;
       geo.classes[c].embeddings.push_back({cd, a, b, fac});
     }
+    for (const auto& [k, fac] : pair_emb[c]) {
+      auto [pc, a, b] = k;
+      geo.classes[c].pair_embeddings.push_back({pc, a, b, fac});
+    }
   }
   return geo;
 }
 
-int Geometry::dh_key(Site after, Site before) const {
-  auto it = dh_key_of.find({after.a, after.b, before.a, before.b});
+namespace {
+
+// (anchor of the holon's sublattice, doublon - holon) of the pair (i, j).
+std::pair<Site, Site> pair_state(const Lattice& lat, Site i, Site j) {
+  return {*lat.anchors[lat.residue(j)], i - j};
+}
+
+std::array<int, 8> dh_flat(std::pair<Site, Site> after, std::pair<Site, Site> before) {
+  return {after.first.a,  after.first.b,  after.second.a,  after.second.b,
+          before.first.a, before.first.b, before.second.a, before.second.b};
+}
+
+}  // namespace
+
+int Geometry::dh_key(Site i2, Site j2, Site i, Site j) const {
+  auto it = dh_key_of.find(dh_flat(pair_state(*lattice, i2, j2), pair_state(*lattice, i, j)));
   if (it == dh_key_of.end()) throw std::logic_error("doublon-holon key missing from geometry");
   return it->second;
 }
 
 void build_dh_keys(Geometry& geo) {
   const Lattice& lat = *geo.lattice;
-  if (lat.cell_sites() != 1) throw std::invalid_argument("doublon-holon keys need a Bravais lattice");
-  std::set<Site> disp;
+  std::set<std::pair<Site, Site>> states;
   for (const auto& cls : geo.classes) {
     for (const auto& real : cls.realizations) {
       for (const auto& p : real.pos) {
         for (const auto& q : real.pos) {
-          if (!(p == q)) disp.insert(q - p);
+          if (!(p == q)) states.insert(pair_state(lat, q, p));
         }
       }
     }
@@ -161,17 +189,17 @@ void build_dh_keys(Geometry& geo) {
   geo.dh_keys.clear();
   geo.dh_key_orbit.clear();
   geo.dh_key_of.clear();
-  for (const Site r2 : disp) {
-    for (const Site r : disp) {
-      if (geo.dh_key_of.count({r2.a, r2.b, r.a, r.b})) continue;
-      std::set<std::array<int, 4>> images;
+  for (const auto& s2 : states) {
+    for (const auto& s : states) {
+      if (geo.dh_key_of.count(dh_flat(s2, s))) continue;
+      std::set<std::array<int, 8>> images;
       for (const auto& g : lat.group) {
-        const Site x = g(r2), y = g(r);
-        images.insert({x.a, x.b, y.a, y.b});
+        const Site h2 = g(s2.first), h = g(s.first);
+        images.insert(dh_flat(pair_state(lat, h2 + g(s2.second), h2), pair_state(lat, h + g(s.second), h)));
       }
       const auto& c = *images.begin();
       const int key = static_cast<int>(geo.dh_keys.size());
-      geo.dh_keys.push_back({Site{c[0], c[1]}, Site{c[2], c[3]}});
+      geo.dh_keys.push_back({Site{c[0], c[1]}, Site{c[2], c[3]}, Site{c[4], c[5]}, Site{c[6], c[7]}});
       geo.dh_key_orbit.push_back(static_cast<int>(images.size()));
       for (const auto& im : images) geo.dh_key_of.emplace(im, key);
     }

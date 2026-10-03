@@ -4,17 +4,20 @@
 // triangular lattice.
 //
 //   nlce_run geometry --nsites N [--lattice L]
-//   nlce_run run --nsites N --v 0,1/20,1/4 --out DIR [--lattice L] [--threads T] [--primes K] [--dh 1]
+//   nlce_run run --nsites N --v 0,1/20,1/4 --out DIR [--lattice L] [--current C] [--threads T] [--primes K]
+//                [--dh 1]
 //   nlce_run cluster --nv N --edges 0-1,1-2 --ng G --nc C --v 1/5 [--pattern +-] [--ndh D] ...
 //     ("none" stands for an empty edge list or pattern)
 //   nlce_run bench --nv N --edges ... --ng G --nc C [--pattern ...] [--v 1/5] [--reps 3]
 //
-// The lattice is chain, square or triangular (the default).  `run` writes one
-// JSON file per V/U with every series coefficient as an exact rational;
-// tools/to_pickles.py converts them to the series/*.pkl format.  chi and m0
-// are computed on the triangular lattice only.  --dh 1 adds the doublon-holon
-// interaction Idh through x^(N-2) (Bravais lattices), read by
-// tools/exciton_series.py.
+// The lattice is chain, square, triangular (the default), honeycomb or
+// kagome.  `run` writes one JSON file per V/U with every series coefficient
+// as an exact rational; tools/to_pickles.py converts them to the series/*.pkl
+// format.  chi and m0 need a current pattern: the triangular lattice carries
+// the staggered one; on the kagome lattice --current staggered or uniform
+// selects one (see lattice.hpp).  --dh 1 adds the doublon-holon
+// interaction Idh through x^(N-2), read by tools/exciton_series.py
+// (triangular) and tools/kagome_exciton.py.
 #include "cluster.hpp"
 #include "driver.hpp"
 #include "geometry.hpp"
@@ -104,11 +107,14 @@ ClusterInput parse_cluster_input(const Args& args) {
   return in;
 }
 
-const Lattice& parse_lattice(const Args& args) { return lattice_by_name(args.get("lattice", "triangular")); }
+Lattice parse_lattice(const Args& args) {
+  const Lattice& lat = lattice_by_name(args.get("lattice", "triangular"));
+  return args.has("current") ? with_current(lat, args.get("current")) : lat;
+}
 
 int cmd_geometry(const Args& args) {
   const int nsites = args.integer("nsites", 0);
-  const Lattice& lat = parse_lattice(args);
+  const Lattice lat = parse_lattice(args);
   const auto t0 = std::chrono::steady_clock::now();
   const Geometry geo = build_geometry(lat, nsites);
   std::printf("%s geometry s<=%d built in %.2fs\n", lat.name.c_str(), nsites, since(t0));
@@ -126,7 +132,7 @@ int cmd_geometry(const Args& args) {
 int cmd_run(const Args& args) {
   const int nsites = args.integer("nsites", 0);
   if (nsites < 2) throw std::invalid_argument("--nsites must be at least 2");
-  const Lattice& lat = parse_lattice(args);
+  const Lattice lat = parse_lattice(args);
   std::vector<Rational> vs;
   for (const auto& s : split(args.get("v", "0,1/20,1/10,3/20,1/5,1/4"), ',')) vs.push_back(parse_rational(s));
   const std::filesystem::path out_dir = args.get("out", ".");
@@ -135,7 +141,7 @@ int cmd_run(const Args& args) {
   opts.fixed_primes = args.integer("primes", 0);
   opts.check_primes = args.integer("check", 2);
   opts.threads = args.integer("threads", static_cast<int>(std::max(1u, std::thread::hardware_concurrency())));
-  const int ng = nsites - 1, nc = lat.currents ? nsites - 2 : 0;
+  const int ng = nsites - 1, nc = lat.currents() ? nsites - 2 : 0;
   if (args.integer("dh", 0)) opts.ndh = nsites - 2;
 
   const auto t0 = std::chrono::steady_clock::now();
@@ -147,7 +153,7 @@ int cmd_run(const Args& args) {
   lattice_series(geo, ng, nc, vs, opts, [&](const LatticeSeries& series) {
     const auto path = out_dir / ("series_s" + std::to_string(nsites) + "_v" + file_tag(series.v) + ".json");
     std::ofstream os(path);
-    write_lattice_json(os, lat, nsites, ng, nc, geo.displacements, opts.ndh, geo.dh_keys, series, opts.check_primes);
+    write_lattice_json(os, geo, nsites, ng, nc, opts.ndh, series, opts.check_primes);
     std::fprintf(stderr, "  V/U=%s: reconstructed from %d primes (%d bits) -> %s\n", to_string(series.v).c_str(),
                  series.primes, series.rec.max_bits, path.string().c_str());
   });

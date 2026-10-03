@@ -17,14 +17,17 @@
 namespace nlce {
 
 // Flattened lattice series of one lane:
-//   EN[k], Hp[cd][k], Hh[cd][k], S[cd][k], chi[k'], m0[k'], Idh[key][k'']
+//   EN[k], Hp[cd][k], Hh[cd][k], S[cd][k], chi[k'], m0[k'], Idh[key][k''],
+//   Hp_pairs[pc][k], Hh_pairs[pc][k]
 // with k <= ng, k' <= nc, k'' <= ndh, cd over Geometry::displacements and key
 // over Geometry::dh_keys.  Idh[(r', r)] is the doublon-holon interaction at
 // total momentum zero, from relative coordinate r to r', summed over the
-// translation of the pair.
+// translation of the pair.  Hp_pairs[pc] and Hh_pairs[pc] are the amplitudes
+// between the two sites of any pair of class pc (Geometry::pairs).
 struct SeriesLayout {
   int ng = 0, nc = 0, ncd = 0;
   int ndh = -1, nkdh = 0;
+  int npc = 0;  // pair classes, Geometry::pairs
   std::size_t en() const { return 0; }
   std::size_t hp() const { return en() + (ng + 1); }
   std::size_t hh() const { return hp() + static_cast<std::size_t>(ncd) * (ng + 1); }
@@ -32,14 +35,17 @@ struct SeriesLayout {
   std::size_t chi() const { return s() + static_cast<std::size_t>(ncd) * (ng + 1); }
   std::size_t m0() const { return chi() + (nc + 1); }
   std::size_t dh() const { return m0() + (nc + 1); }
-  std::size_t size() const { return dh() + (ndh >= 0 ? static_cast<std::size_t>(nkdh) * (ndh + 1) : 0); }
+  std::size_t hp_pairs() const { return dh() + (ndh >= 0 ? static_cast<std::size_t>(nkdh) * (ndh + 1) : 0); }
+  std::size_t hh_pairs() const { return hp_pairs() + static_cast<std::size_t>(npc) * (ng + 1); }
+  std::size_t size() const { return hh_pairs() + static_cast<std::size_t>(npc) * (ng + 1); }
 
   // Perturbative order of coefficient i.
   int order(std::size_t i) const {
     if (i < hp()) return static_cast<int>(i);
     if (i < chi()) return static_cast<int>((i - hp()) % (ng + 1));
     if (i < dh()) return static_cast<int>(i < m0() ? i - chi() : i - m0());
-    return static_cast<int>((i - dh()) % (ndh + 1));
+    if (i < hp_pairs()) return static_cast<int>((i - dh()) % (ndh + 1));
+    return static_cast<int>((i - hp_pairs()) % (ng + 1));
   }
 };
 

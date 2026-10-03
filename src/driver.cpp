@@ -46,7 +46,7 @@ void lattice_series(const Geometry& geo, int ng, int nc, const std::vector<Ratio
   std::vector<State> states;
   for (const auto& v : vs) states.push_back({v, (fixed > 0 ? fixed : kInitialPrimes) + ncheck, {}, {}, 0, false});
   const SeriesLayout layout{ng, nc, static_cast<int>(geo.displacements.size()), opts.ndh,
-                            static_cast<int>(geo.dh_keys.size())};
+                            static_cast<int>(geo.dh_keys.size()), static_cast<int>(geo.pairs.size())};
 
   std::vector<u64> pool;
   for (int pass = 1;; ++pass) {

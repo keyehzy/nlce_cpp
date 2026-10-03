@@ -42,6 +42,10 @@ struct ClassInfo {
   int matching = 0;       // double_cover_matching of the class graph
   std::int64_t mult = 0;  // embeddings per unit cell
   std::vector<Embedding> embeddings;  // site-pair embeddings by displacement
+  // Site-pair embeddings by pair class (Geometry::pairs); `fac` is the orbit
+  // of the realisation, so a pair class's amplitude is the sum of fac times
+  // the cumulant over its pair count.
+  std::vector<Embedding> pair_embeddings;
   std::vector<int> keys;  // decorated keys of this class
   std::vector<Realization> realizations;
 };
@@ -59,23 +63,33 @@ struct Geometry {
   std::vector<ClassInfo> classes;
   std::vector<KeyInfo> keys;
   std::vector<Site> displacements;  // canonical displacements, first-seen order
+  // On lattices with several sites per cell, the classes of ordered site
+  // pairs modulo the space group, as canonical_pair, and their pairs per
+  // unit cell.  A displacement no longer fixes a pair there, but a pair
+  // class does, so these give the effective Hamiltonians between
+  // sublattices.  Empty on Bravais lattices.
+  std::vector<std::array<Site, 2>> pairs;
+  std::vector<int> pair_counts;
   boost::unordered_flat_map<Cert, int, CertHash> class_of;
   boost::unordered_flat_map<std::string, int> key_of;
-  // Doublon-holon keys (r', r), relative coordinates doublon - holon after and
-  // before a process, modulo the point group acting on both; see build_dh_keys.
-  std::vector<std::array<Site, 2>> dh_keys;
-  std::vector<int> dh_key_orbit;  // images of each key under the point group
-  boost::unordered_flat_map<std::array<int, 4>, int, boost::hash<std::array<int, 4>>> dh_key_of;
+  // Doublon-holon keys (h', r', h, r): a pair state at total momentum zero is
+  // fixed by the holon's sublattice, here its anchor h, and the relative
+  // coordinate r = doublon - holon; the key joins the states after and before
+  // a process, modulo the point group acting on both; see build_dh_keys.  On
+  // a Bravais lattice h = h' = 0.
+  std::vector<std::array<Site, 4>> dh_keys;
+  std::vector<int> dh_key_orbit;  // normalised point-group images of each key
+  boost::unordered_flat_map<std::array<int, 8>, int, boost::hash<std::array<int, 8>>> dh_key_of;
 
   int key_index(int cls, const Pattern& pattern) const;
-  int dh_key(Site after, Site before) const;
+  // Key of the process from (doublon i, holon j) to (doublon i2, holon j2).
+  int dh_key(Site i2, Site j2, Site i, Site j) const;
 };
 
 Geometry build_geometry(const Lattice& lat, int smax);
 
-// Indexes every pair of nonzero displacements within a realisation.  Defined
-// on Bravais lattices only, where a displacement fixes the pair of sites up
-// to translation.
+// Indexes every combination of two site pairs that occur within a
+// realisation, each pair taken modulo translation.
 void build_dh_keys(Geometry& geo);
 
 // Lexicographically smallest image of `signs` (one per class edge, oriented

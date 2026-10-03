@@ -33,6 +33,9 @@ lattices), so the usual -t model follows by x -> -x.  `--nsites s` gives Delta a
 x^(s-2).  `tools/q0_series.py SERIES.json` prints Delta(q=0), S(q=0) and
 E/N in the -t convention.
 `--dh 1` adds the doublon-holon interaction (below) through x^(s-2).
+On the kagome lattice `--current staggered` or `--current uniform` adds chi
+and m0 for one of its two chiral current patterns (below), and the output
+also gives Hp and Hh between the sublattices (`Hp_pairs`, `Hh_pairs`).
 `nlce_run geometry --nsites s` prints cluster, class and key counts;
 `nlce_run bench` times one cluster (see the header of `src/main.cpp`).
 
@@ -245,3 +248,100 @@ first across the wrap-around bond without hopping.)
 
 The cost is about six times that of a plain run (s = 9: 38 s, 0.8 GB
 against 7 s, 0.2 GB at one V/U; s = 10 at four V/U: 38 minutes, 4 GB).
+
+## Chiral Mott insulator on the kagome lattice
+
+The kagome lattice has two translation-invariant chiral current patterns
+(`--current`, see `src/lattice.hpp`): `staggered`, the triangular pattern
+restricted to the kagome bonds, circulating oppositely around up and down
+triangles (the vector chirality of the sqrt3 x sqrt3 state), and `uniform`,
+circulating the same way around every triangle (that of the q = 0 state).
+Both start as chi = 16/(1 - V) + ..., 20 + 225 x + ... at V/U = 1/5, and differ first
+at x^4, where a hexagon loop fits.  `tools/kagome_cmi.py` applies the test
+of `tools/cmi_series.py` and `tools/kagome_exciton.py` that of
+`tools/exciton_series.py`.  Two kagome-specific ingredients:
+
+* The gap.  With +t both quasiparticle bands are flat at x^1, and they stay
+  flat through x^4 (x^7 at V = 0); the minimum is selected at x^5, at Gamma
+  for V > 0 and at K for V = 0, and the whole flat band is 8e-5 wide at
+  x = 0.05.  The gap is E_p + E_h at those points, an exact series from
+  the 3 x 3 Bloch matrices built from `Hp_pairs`, `Hh_pairs`.
+* The excitons.  At total momentum zero the twelve adjacent doublon-holon
+  states per cell carry the regular representation of D6, so each chiral
+  pattern, and the non-chiral breathing (`trimer`) bond order, is the only
+  adjacent state of its representation and has an ordinary
+  Rayleigh-Schroedinger series for V > 0.  At x^1, on one triangle, the
+  chiral combinations have -3x and the trimer +3x, against -6x for the gap.
+
+Results at V/U = 1/10, 1/5, 1/4, 3/10 (chi s = 12 staggered and s = 11
+uniform; excitons s = 11, and s = 12 at V/U = 1/4), +t hopping:
+
+* The gap does not close.  No dlog Pade approximant has a real pole for
+  0 < x < 1, and its Euler-Pade values stay near 0.5 at x = 0.2 and 0.45 at
+  x = 0.4 for V/U >= 1/5.
+* The staggered chiral exciton softens most, but the series does not
+  settle whether it reaches zero.  Its zero against the order of the
+  exciton series (x^6 .. x^10):
+
+  | V/U  | x_ex                       | gap at x_ex |
+  |------|----------------------------|-------------|
+  | 1/5  | 0.33 0.32 0.30 0.26        | 0.48-0.50   |
+  | 1/4  | 0.35 0.35 0.34 0.32 none   | 0.47-0.48   |
+  | 3/10 | 0.36 0.35 0.38 0.36        | 0.44-0.45   |
+
+  At x^10 (s = 12, V/U = 1/4) the new approximants level off near
+  E_ex = 0.4 at x = 0.3 where those of x^9 gave 0.04-0.06, so the earlier
+  zeros are not converged.  At V/U = 1/10 the approximants scatter (its
+  series has a singularity at x = -0.014 on the unfrustrated side); V/U =
+  2/5 is an exact degeneracy of H0, which the expansion rejects.
+* The uniform chiral exciton never reaches zero, and the trimer exciton
+  rises above the gap.
+* chi, of either pattern, is inconclusive: its series is dominated by a
+  stable pair of complex singularities near x = -0.028 +- 0.069i (V/U =
+  1/5), closer than any feature on the frustrated side, so no approximant
+  has a real pole and the biased exponents near x_ex are 0.5 +- 0.3.
+* The resummed two-body problem (`kagome_exciton.py --solve`) agrees with
+  the series for x <= 0.05 and gives the same binding, about 0.15, at
+  x = 0.1; beyond that it inherits the errors of the amplitude-by-amplitude
+  resummation and is not used.
+
+Within the method, then, the question stays open: the gap stays near U/2
+far out, the staggered exciton softens strongly, but whether it condenses
+before the series lose control is not settled by twelve orders, and the chi
+test cannot see that far.
+
+### DMRG on cylinders
+
+`tools/kagome_dmrg.py` (TeNPy) runs iDMRG of the same model, at most three
+bosons per site, on infinite cylinders of Ly = 2 and 3 unit cells around.
+Per point it compares the free run with two runs that pin a current
+pattern (`staggered` or `uniform`) and ramp the field down to zero, and it
+measures the bond currents, bond energies (trimerised and nematic bond
+order), densities (charge order), the single-particle correlation length
+xi_b (Mott vs superfluid), the neutral-sector correlation length, and
+chirality, bond and density correlations along the cylinder.
+`tools/kagome_dmrg_summary.py DIR` tabulates the results.
+
+At V/U = 1/4, t/U = 0.2-0.85 (Ly = 2 at chi = 128, and chi = 256 near the
+transition; Ly = 3 at chi = 256 for t/U = 0.3, 0.4, 0.5, 0.6, 0.7):
+
+* Mott insulator up to t/U = 0.55 (Ly = 2) and 0.4 (Ly = 3): xi_b = 5-10,
+  no current once the field is removed, short-ranged chirality, density
+  and bond correlations, and equal bond energies on up and down triangles.
+  The pinned currents grow faster than linearly in the field (kappa/h
+  about 30-50).
+* Chiral superfluid from t/U = 0.575 (Ly = 2) and 0.5 (Ly = 3): |kappa|
+  ~ 1.5 per bond with xi_b > 100 and growing with chi, below the Mott
+  branch, which survives as a metastable state, as the chiral branch does
+  below the transition.  On Ly = 2 the uniform (q = 0) pattern is lowest,
+  on Ly = 3, which fits the sqrt3 x sqrt3 structure, the staggered one,
+  the pattern whose exciton the series find softest.
+* A superfluid without current at t/U = 0.85 (Ly = 2).
+
+No state has a current together with a short xi_b: no chiral Mott
+insulator appears, and the Mott insulator gives way directly, through a
+level crossing of the two branches, to a chiral superfluid.  The window
+0.4 < t/U < 0.5 on Ly = 3 was not sampled.  Caveats: thin cylinders and
+modest bond dimension; the competition between the q = 0 and
+sqrt3 x sqrt3 patterns needs wider cylinders.  The script needs TeNPy
+(`pip install physics-tenpy`), which the C++ build does not.

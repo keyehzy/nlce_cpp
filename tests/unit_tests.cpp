@@ -9,6 +9,7 @@
 #include "rational.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstdio>
 #include <numeric>
 #include <random>
@@ -268,18 +269,118 @@ void test_point_group_reduction() {
   PassOptions opts;
   opts.threads = 2;
   opts.verbose = false;
+  const Lattice kagome_staggered = with_current(kagome_lattice(), "staggered");
+  const Lattice kagome_uniform = with_current(kagome_lattice(), "uniform");
   for (const auto& [base, smax] : {std::pair{&honeycomb_lattice(), 8}, std::pair{&kagome_lattice(), 7},
+                                   std::pair{&kagome_staggered, 7}, std::pair{&kagome_uniform, 7},
                                    std::pair{&triangular_lattice(), 6}}) {
     Lattice bare = *base;
     bare.group = {{1, 0, 0, 1}};
-    const int ng = smax - 1, nc = base->currents ? smax - 2 : 0;
+    const int ng = smax - 1, nc = base->currents() ? smax - 2 : 0;
     const Geometry full = build_geometry(*base, smax);
     const Geometry plain = build_geometry(bare, smax);
     check(plain.classes.size() == full.classes.size(), base->name + " classes without point group");
-    const auto a = q0_sums(full, run_pass(full, ng, nc, lanes, opts), lanes, ng, nc);
-    const auto b = q0_sums(plain, run_pass(plain, ng, nc, lanes, opts), lanes, ng, nc);
+    const auto sa = run_pass(full, ng, nc, lanes, opts);
+    const auto sb = run_pass(plain, ng, nc, lanes, opts);
+    const auto a = q0_sums(full, sa, lanes, ng, nc);
+    const auto b = q0_sums(plain, sb, lanes, ng, nc);
     check(a == b, base->name + " q = 0 sums without point group");
+    if (full.pairs.empty()) continue;
+
+    // Every pair amplitude is that of its class under the full group, and
+    // the pair classes reproduce the q = 0 gap of the displacement sums.
+    const SeriesLayout la{ng, nc, static_cast<int>(full.displacements.size()), -1, 0,
+                          static_cast<int>(full.pairs.size())};
+    const SeriesLayout lb{ng, nc, static_cast<int>(plain.displacements.size()), -1, 0,
+                          static_cast<int>(plain.pairs.size())};
+    for (std::size_t g = 0; g < lanes.size(); ++g) {
+      const Modulus m(lanes[g].p);
+      std::vector<u64> gap(ng + 1, 0);
+      for (std::size_t pc = 0; pc < full.pairs.size(); ++pc) {
+        for (int k = 0; k <= ng; ++k) {
+          const std::size_t at = pc * (ng + 1) + k;
+          const u64 t = m.add(sa[g][la.hp_pairs() + at], sa[g][la.hh_pairs() + at]);
+          gap[k] = m.add(gap[k], m.mul(m.from_int(full.pair_counts[pc]), t));
+        }
+      }
+      const u64 inv_cell = m.inv(m.from_int(base->cell_sites()));
+      for (int k = 0; k <= ng; ++k) gap[k] = m.mul(gap[k], inv_cell);
+      check(std::vector<u64>(a[g].begin(), a[g].begin() + ng + 1) == gap, base->name + " pair classes at q = 0");
+
+      bool same = true;
+      for (std::size_t pc = 0; pc < plain.pairs.size(); ++pc) {
+        const auto cp = canonical_pair(*base, plain.pairs[pc][0], plain.pairs[pc][1]);
+        const auto it = std::find(full.pairs.begin(), full.pairs.end(), std::array<Site, 2>{cp.first, cp.second});
+        if (it == full.pairs.end()) {
+          same = false;
+          continue;
+        }
+        const std::size_t fc = it - full.pairs.begin();
+        for (int k = 0; k <= ng; ++k) {
+          same = same && sb[g][lb.hp_pairs() + pc * (ng + 1) + k] == sa[g][la.hp_pairs() + fc * (ng + 1) + k] &&
+                 sb[g][lb.hh_pairs() + pc * (ng + 1) + k] == sa[g][la.hh_pairs() + fc * (ng + 1) + k];
+        }
+      }
+      check(same, base->name + " pair amplitudes without point group");
+    }
   }
+}
+
+// Each kagome current pattern circulates as documented: summed
+// anticlockwise, the staggered signs give -3 on up triangles and +3 on down
+// ones and cancel around the hexagons; the uniform signs give +3 on every
+// triangle and -6 around every hexagon.  Both patterns are invariant under
+// the translations and under the point group up to a global sign.
+void test_kagome_currents() {
+  const Lattice stag = with_current(kagome_lattice(), "staggered");
+  const Lattice unif = with_current(kagome_lattice(), "uniform");
+  auto circulation = [](const Lattice& lat, const std::vector<Site>& loop) {
+    int sum = 0;
+    for (std::size_t i = 0; i < loop.size(); ++i) sum += current_sign(lat, loop[i], loop[(i + 1) % loop.size()]);
+    return sum;
+  };
+  const std::vector<Site> up{{1, 1}, {2, 1}, {1, 2}}, up2{{-1, 1}, {0, 1}, {-1, 2}};
+  const std::vector<Site> down{{1, 0}, {1, 1}, {0, 1}};
+  const std::vector<Site> hexagon{{1, 0}, {0, 1}, {-1, 1}, {-1, 0}, {0, -1}, {1, -1}};
+  for (const auto& t : {up, up2, down}) {
+    for (const Site s : t) check(kagome_lattice().is_site(s), "kagome triangle corners");
+  }
+  check(circulation(stag, up) == -3 && circulation(stag, up2) == -3, "staggered: up triangles");
+  check(circulation(stag, down) == 3, "staggered: down triangles");
+  check(circulation(stag, hexagon) == 0, "staggered: hexagons");
+  check(circulation(unif, up) == 3 && circulation(unif, up2) == 3 && circulation(unif, down) == 3,
+        "uniform: triangles");
+  check(circulation(unif, hexagon) == -6, "uniform: hexagons");
+
+  for (const Lattice* lat : {&stag, &unif}) {
+    for (const auto& m : lat->group) {
+      int rel = 0;
+      bool ok = true;
+      for (int a = -4; a <= 4; ++a) {
+        for (int b = -4; b <= 4; ++b) {
+          const Site p{a, b};
+          if (!lat->is_site(p)) continue;
+          for (const Site d : lat->dirs) {
+            const Site q = p + d;
+            if (!lat->is_site(q)) continue;
+            const int s = current_sign(*lat, p, q);
+            for (const Site t : {Site{2, 0}, Site{0, 2}}) ok = ok && current_sign(*lat, p + t, q + t) == s;
+            const int r = current_sign(*lat, m(p), m(q)) * s;
+            if (!rel) rel = r;
+            ok = ok && r == rel;
+          }
+        }
+      }
+      check(ok, lat->name + " current pattern symmetric");
+    }
+  }
+  bool threw = false;
+  try {
+    with_current(square_lattice(), "staggered");
+  } catch (const std::invalid_argument&) {
+    threw = true;
+  }
+  check(threw, "no current pattern on the square lattice");
 }
 
 // A small full run must satisfy the exact cumulant cancellation in every lane;
@@ -363,6 +464,52 @@ void test_doublon_holon() {
   }
   check(ok, "doublon-holon cumulant cancellation, s<=7");
   check(ok && capped == full, "doublon-holon interaction with occupation-capped largest classes, s<=7");
+
+  // The kagome keys also fix the holon's sublattice; dropping the point
+  // group must leave every key's amplitude unchanged.
+  Geometry kag = build_geometry(kagome_lattice(), 7);
+  Lattice bare = kagome_lattice();
+  bare.group = {{1, 0, 0, 1}};
+  Geometry plain = build_geometry(bare, 7);
+  build_dh_keys(kag);
+  build_dh_keys(plain);
+  opts.cap_largest = true;
+  ok = true;
+  std::vector<std::vector<u64>> kfull, kplain;
+  try {
+    kfull = run_pass(kag, 6, 0, lanes, opts);
+    kplain = run_pass(plain, 6, 0, lanes, opts);
+  } catch (const std::exception& e) {
+    ok = false;
+    std::fprintf(stderr, "%s\n", e.what());
+  }
+  check(ok, "kagome doublon-holon cumulant cancellation, s<=7");
+  if (!ok) return;
+  const SeriesLayout la{6, 0, static_cast<int>(kag.displacements.size()), 5, static_cast<int>(kag.dh_keys.size()),
+                        static_cast<int>(kag.pairs.size())};
+  const SeriesLayout lb{6, 0, static_cast<int>(plain.displacements.size()), 5,
+                        static_cast<int>(plain.dh_keys.size()), static_cast<int>(plain.pairs.size())};
+  // Keys are indexed only for state pairs within one realisation, so some
+  // combinations of the bare lattice have no key on the full one; those
+  // never occur in a cluster and must vanish.
+  bool same = true;
+  int compared = 0;
+  for (std::size_t q = 0; q < plain.dh_keys.size(); ++q) {
+    const auto& [h2, r2, h, r] = plain.dh_keys[q];
+    int fk = -1;
+    try {
+      fk = kag.dh_key(h2 + r2, h2, h + r, h);
+    } catch (const std::logic_error&) {
+    }
+    for (std::size_t g = 0; g < lanes.size(); ++g) {
+      for (int k = 0; k <= 5; ++k) {
+        const u64 x = kplain[g][lb.dh() + q * 6 + k];
+        same = same && (fk < 0 ? x == 0 : x == kfull[g][la.dh() + fk * 6 + k]);
+      }
+    }
+    compared += fk >= 0;
+  }
+  check(same && compared > 0, "kagome doublon-holon keys without point group");
 }
 
 // Inputs beyond the overflow budget must be rejected, not computed wrongly.
@@ -387,6 +534,7 @@ int main() {
   test_bipartite_geometry();
   test_honeycomb_geometry();
   test_kagome_geometry();
+  test_kagome_currents();
   test_point_group_reduction();
   test_small_pass();
   test_occupation_cap();

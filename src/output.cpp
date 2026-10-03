@@ -17,15 +17,24 @@ void json_list(std::ostream& os, const std::vector<std::string>& v, std::size_t 
 
 }  // namespace
 
-void write_lattice_json(std::ostream& os, const Lattice& lattice, int nsites, int ng, int nc,
-                        const std::vector<Site>& displacements, int ndh,
-                        const std::vector<std::array<Site, 2>>& dh_keys, const LatticeSeries& series,
-                        int check_primes) {
+void write_lattice_json(std::ostream& os, const Geometry& geo, int nsites, int ng, int nc, int ndh,
+                        const LatticeSeries& series, int check_primes) {
+  const Lattice& lattice = *geo.lattice;
+  const std::vector<Site>& displacements = geo.displacements;
+  const std::vector<std::array<Site, 4>>& dh_keys = geo.dh_keys;
   const Reconstruction& rec = series.rec;
-  const SeriesLayout lay{ng, nc, static_cast<int>(displacements.size()), ndh, static_cast<int>(dh_keys.size())};
+  const SeriesLayout lay{ng,
+                         nc,
+                         static_cast<int>(displacements.size()),
+                         ndh,
+                         static_cast<int>(dh_keys.size()),
+                         static_cast<int>(geo.pairs.size())};
   os << "{\n\"lattice\": \"" << lattice.name << "\",\n\"nsites\": " << nsites << ",\n\"v\": \""
      << to_string(series.v) << "\",\n\"order_gap\": " << ng;
-  if (lattice.currents) os << ",\n\"order_chi\": " << nc;
+  if (lattice.currents()) {
+    os << ",\n\"current\": \"" << (lattice.current == Current::uniform ? "uniform" : "staggered")
+       << "\",\n\"order_chi\": " << nc;
+  }
   os << ",\n\"primes\": " << series.primes << ",\n\"check_primes\": " << check_primes
      << ",\n\"max_bits\": " << rec.max_bits << ",\n\"displacements\": [";
   for (std::size_t d = 0; d < displacements.size(); ++d) {
@@ -45,7 +54,7 @@ void write_lattice_json(std::ostream& os, const Lattice& lattice, int nsites, in
     }
     os << ']';
   }
-  if (lattice.currents) {
+  if (lattice.currents()) {
     os << ",\n\"chi\": ";
     json_list(os, rec.values, lay.chi(), nc + 1);
     os << ",\n\"m0\": ";
@@ -54,8 +63,15 @@ void write_lattice_json(std::ostream& os, const Lattice& lattice, int nsites, in
   if (ndh >= 0) {
     os << ",\n\"order_dh\": " << ndh << ",\n\"dh_keys\": [";
     for (std::size_t q = 0; q < dh_keys.size(); ++q) {
-      const auto& [r2, r] = dh_keys[q];
+      const auto& [h2, r2, h, r] = dh_keys[q];
       os << (q ? "," : "") << '[' << r2.a << ',' << r2.b << ',' << r.a << ',' << r.b << ']';
+    }
+    if (lattice.cell_sites() > 1) {
+      os << "],\n\"dh_holons\": [";
+      for (std::size_t q = 0; q < dh_keys.size(); ++q) {
+        const auto& [h2, r2, h, r] = dh_keys[q];
+        os << (q ? "," : "") << '[' << h2.a << ',' << h2.b << ',' << h.a << ',' << h.b << ']';
+      }
     }
     os << "],\n\"Idh\": [";
     for (std::size_t q = 0; q < dh_keys.size(); ++q) {
@@ -63,6 +79,24 @@ void write_lattice_json(std::ostream& os, const Lattice& lattice, int nsites, in
       json_list(os, rec.values, lay.dh() + q * (ndh + 1), ndh + 1);
     }
     os << ']';
+  }
+  if (!geo.pairs.empty()) {
+    os << ",\n\"pairs\": [";
+    for (std::size_t q = 0; q < geo.pairs.size(); ++q) {
+      const auto& [p, r] = geo.pairs[q];
+      os << (q ? "," : "") << '[' << p.a << ',' << p.b << ',' << r.a << ',' << r.b << ']';
+    }
+    os << "],\n\"pair_counts\": [";
+    for (std::size_t q = 0; q < geo.pairs.size(); ++q) os << (q ? "," : "") << geo.pair_counts[q];
+    os << ']';
+    for (auto [name, off] : {std::pair{"Hp_pairs", lay.hp_pairs()}, std::pair{"Hh_pairs", lay.hh_pairs()}}) {
+      os << ",\n\"" << name << "\": [";
+      for (std::size_t q = 0; q < geo.pairs.size(); ++q) {
+        os << (q ? ",\n  " : "");
+        json_list(os, rec.values, off + q * (ng + 1), ng + 1);
+      }
+      os << ']';
+    }
   }
   os << "\n}\n";
 }

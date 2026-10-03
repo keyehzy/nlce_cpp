@@ -124,7 +124,12 @@ class Pass {
 public:
   Pass(const Geometry& geo, int ng, int nc, const std::vector<LaneSpec>& lanes, const PassOptions& opts)
       : geo_(geo), ng_(ng), nc_(nc), lanes_(lanes), opts_(opts), nl_(lanes.size()) {
-    layout_ = {ng, nc, static_cast<int>(geo.displacements.size()), opts.ndh, static_cast<int>(geo.dh_keys.size())};
+    layout_ = {ng,
+               nc,
+               static_cast<int>(geo.displacements.size()),
+               opts.ndh,
+               static_cast<int>(geo.dh_keys.size()),
+               static_cast<int>(geo.pairs.size())};
     if (opts.ndh >= 0 && geo.dh_keys.empty()) throw std::logic_error("doublon-holon keys not built");
     for (std::size_t b = 0; b < nl_; b += L) blocks_.push_back(make_lane_block(lanes_, b));
     const int top = geo.smax;
@@ -205,6 +210,11 @@ public:
       const Modulus& m = blocks_[g / L].mod[g % L];
       u64& x = out[g][layout_.hp() + cd0 * (ng_ + 1)];
       x = m.add(x, 1);
+      for (std::size_t pc = 0; pc < geo_.pairs.size(); ++pc) {
+        if (!(geo_.pairs[pc][0] == geo_.pairs[pc][1])) continue;
+        u64& y = out[g][layout_.hp_pairs() + pc * (ng_ + 1)];
+        y = m.add(y, 1);
+      }
     }
     return out;
   }
@@ -263,8 +273,10 @@ private:
     }
   }
 
-  // Lattice weights of the class's Idh rows: per row and key (r', r), the
+  // Lattice weights of the class's Idh rows: per row and key, the
   // realisations' orbits times |G| / |orbit of the key|, as for Embedding.
+  // The keys fix the holon's sublattice, so these are not averaged over the
+  // unit cell.
   struct DhEmbedding {
     std::uint32_t row;
     int key;
@@ -280,11 +292,10 @@ private:
       for (int i2 = 0; i2 < n; ++i2) {
         for (int j2 = 0; j2 < n; ++j2) {
           if (i2 == j2) continue;
-          const Site after = real.pos[i2] - real.pos[j2];
           for (int i = 0; i < n; ++i) {
             for (int j = 0; j < n; ++j) {
               if (i == j) continue;
-              const int k = geo_.dh_key(after, real.pos[i] - real.pos[j]);
+              const int k = geo_.dh_key(real.pos[i2], real.pos[j2], real.pos[i], real.pos[j]);
               const std::uint64_t row = ((static_cast<std::uint64_t>(i2) * n + j2) * n + i) * n + j;
               acc[row << 32 | static_cast<std::uint32_t>(k)] += real.orbit * order / geo_.dh_key_orbit[k];
             }
@@ -466,6 +477,16 @@ private:
           }
         }
       }
+      for (const Embedding& e : cls.pair_embeddings) {
+        const u64 f = m.mul(m.from_int(e.fac), m.inv(m.from_int(geo_.pair_counts[e.cd])));
+        const std::size_t off = static_cast<std::size_t>(e.cd) * (ng_ + 1);
+        for (int k = k0; k <= ng_; ++k) {
+          u64& hp = tot[layout_.hp_pairs() + off + k];
+          hp = m.add(hp, m.mul(f, raw.Hp[raw.pair_at(e.a, e.b, k) + l]));
+          u64& hh = tot[layout_.hh_pairs() + off + k];
+          hh = m.add(hh, m.mul(f, raw.Hh[raw.pair_at(e.a, e.b, k) + l]));
+        }
+      }
       for (int q = 0; q < raw.npat; ++q) {
         const u64 km = m.mul(m.from_int(geo_.keys[cls.keys[q]].mult), inv_cell);
         const u64 km2 = m.add(km, km);
@@ -476,8 +497,9 @@ private:
           mm = m.add(mm, m.mul(km, raw.m0[raw.pattern_at(q, k) + l]));
         }
       }
+      const u64 inv_group = m.inv(m.from_int(static_cast<i64>(geo_.lattice->group.size())));
       for (const DhEmbedding& e : dh_emb) {
-        const u64 f = m.mul(m.from_int(e.fac), inv_order);
+        const u64 f = m.mul(m.from_int(e.fac), inv_group);
         const std::size_t off = layout_.dh() + static_cast<std::size_t>(e.key) * (raw.ndh + 1);
         for (int k = lead.dh; k <= raw.ndh; ++k) {
           u64& x = tot[off + k];
