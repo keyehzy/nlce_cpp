@@ -76,6 +76,11 @@ if(Python3_Interpreter_FOUND)
       COMMAND Python3::Interpreter ${CMAKE_SOURCE_DIR}/tools/paper_check.py
         --binary $<TARGET_FILE:nlce_run> --lattice ${lattice} --nsites ${nsites})
   endforeach()
+  # The honeycomb lattice has no published series; it is checked against a
+  # 14-site periodic torus solved as one cluster, exact through x^5.
+  add_test(NAME honeycomb_torus
+    COMMAND Python3::Interpreter ${CMAKE_SOURCE_DIR}/tools/honeycomb_torus.py
+      --binary $<TARGET_FILE:nlce_run> --nsites 7)
   add_custom_target(validate_paper
     COMMAND Python3::Interpreter ${CMAKE_SOURCE_DIR}/tools/paper_check.py
       --binary $<TARGET_FILE:nlce_run> --lattice chain --nsites 14

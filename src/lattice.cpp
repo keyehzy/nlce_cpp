@@ -48,43 +48,68 @@ struct SitesHash {
   }
 };
 
-std::vector<Site> normalised_image(const PointOp& m, const std::vector<Site>& sites) {
+std::vector<Site> normalised_image(const Lattice& lat, const PointOp& m, const std::vector<Site>& sites) {
   std::vector<Site> img;
   img.reserve(sites.size());
   for (const auto& s : sites) img.push_back(m(s));
-  Site o = *std::min_element(img.begin(), img.end());
-  for (auto& s : img) s = s - o;
+  const Site o = *std::min_element(img.begin(), img.end());
+  const Site shift = *lat.anchors[lat.residue(o)] - o;
+  for (auto& s : img) s = s + shift;
   std::sort(img.begin(), img.end());
   return img;
 }
 
+// 60-degree rotation (a, b) -> (-b, a + b) and the mirror about e1.
+const std::vector<PointOp>& d6_group() {
+  static const std::vector<PointOp> group = generate_group({{0, -1, 1, 1}, {1, 1, 0, -1}}, 12);
+  return group;
+}
+
 }  // namespace
+
+int Lattice::cell_sites() const {
+  return static_cast<int>(std::count_if(anchors.begin(), anchors.end(), [](const auto& a) { return a.has_value(); }));
+}
 
 const Lattice& chain_lattice() {
   // Inversion (a, 0) -> (-a, 0).
-  static const Lattice lat{"chain", {{1, 0}}, generate_group({{-1, 0, 0, -1}}, 2), false};
+  static const Lattice lat{.name = "chain", .dirs = {{1, 0}}, .group = generate_group({{-1, 0, 0, -1}}, 2)};
   return lat;
 }
 
 const Lattice& square_lattice() {
   // 90-degree rotation (a, b) -> (-b, a) and the mirror about e1.
-  static const Lattice lat{"square", {{1, 0}, {0, 1}},
-                           generate_group({{0, -1, 1, 0}, {1, 0, 0, -1}}, 8), false};
+  static const Lattice lat{.name = "square",
+                           .dirs = {{1, 0}, {0, 1}},
+                           .group = generate_group({{0, -1, 1, 0}, {1, 0, 0, -1}}, 8)};
   return lat;
 }
 
 const Lattice& triangular_lattice() {
-  // 60-degree rotation (a, b) -> (-b, a + b) and the mirror about e1.
-  static const Lattice lat{"triangular", {{1, 0}, {0, 1}, {1, -1}},
-                           generate_group({{0, -1, 1, 1}, {1, 1, 0, -1}}, 12), true};
+  static const Lattice lat{.name = "triangular", .dirs = {{1, 0}, {0, 1}, {1, -1}}, .group = d6_group(),
+                           .currents = true};
+  return lat;
+}
+
+const Lattice& honeycomb_lattice() {
+  // Residues of (2a + b) mod 3: 0 for the hexagon centres, 1 and 2 for the two
+  // sublattices.  Every triangular bond joins different residues, so between
+  // sites they are exactly the honeycomb bonds.  The D6 about a hexagon centre
+  // maps residue r to -r and so preserves the sites and the translations.
+  static const Lattice lat{.name = "honeycomb",
+                           .dirs = {{1, 0}, {0, 1}, {1, -1}},
+                           .group = d6_group(),
+                           .period = 3,
+                           .form = {2, 1},
+                           .anchors = {std::nullopt, Site{0, 1}, Site{1, 0}}};
   return lat;
 }
 
 const Lattice& lattice_by_name(const std::string& name) {
-  for (const Lattice* lat : {&chain_lattice(), &square_lattice(), &triangular_lattice()}) {
+  for (const Lattice* lat : {&chain_lattice(), &square_lattice(), &triangular_lattice(), &honeycomb_lattice()}) {
     if (name == lat->name) return *lat;
   }
-  throw std::invalid_argument("unknown lattice " + name + " (chain, square, triangular)");
+  throw std::invalid_argument("unknown lattice " + name + " (chain, square, triangular, honeycomb)");
 }
 
 Site canonical_displacement(const Lattice& lat, Site d) {
@@ -119,7 +144,7 @@ std::vector<Bond> induced_bonds(const Lattice& lat, const std::vector<Site>& sit
 std::vector<Site> canonical_sites(const Lattice& lat, const std::vector<Site>& sites) {
   std::vector<Site> best;
   for (const auto& m : lat.group) {
-    auto img = normalised_image(m, sites);
+    auto img = normalised_image(lat, m, sites);
     if (best.empty() || img < best) best = std::move(img);
   }
   return best;
@@ -127,14 +152,15 @@ std::vector<Site> canonical_sites(const Lattice& lat, const std::vector<Site>& s
 
 int site_orbit_size(const Lattice& lat, const std::vector<Site>& sites) {
   std::set<std::vector<Site>> forms;
-  for (const auto& m : lat.group) forms.insert(normalised_image(m, sites));
+  for (const auto& m : lat.group) forms.insert(normalised_image(lat, m, sites));
   return static_cast<int>(forms.size());
 }
 
 std::vector<std::vector<std::vector<Site>>> enumerate_site_clusters(const Lattice& lat, int smax) {
   if (smax < 1) throw std::invalid_argument("smax must be positive");
   std::vector<std::vector<std::vector<Site>>> reps(smax + 1);
-  reps[1].push_back(canonical_sites(lat, {{0, 0}}));
+  const auto first = std::find_if(lat.anchors.begin(), lat.anchors.end(), [](const auto& a) { return a.has_value(); });
+  reps[1].push_back(canonical_sites(lat, {**first}));
   for (int s = 1; s < smax; ++s) {
     boost::unordered_flat_set<std::vector<Site>, SitesHash> seen;
     auto& next = reps[s + 1];
@@ -144,7 +170,7 @@ std::vector<std::vector<std::vector<Site>>> enumerate_site_clusters(const Lattic
       for (const auto& u : cluster) {
         for (const auto& d : lat.dirs) {
           for (Site w : {u + d, u - d}) {
-            if (!members.count(w)) candidates.insert(w);
+            if (lat.is_site(w) && !members.count(w)) candidates.insert(w);
           }
         }
       }

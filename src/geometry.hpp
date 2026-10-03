@@ -22,7 +22,7 @@ using Pattern = std::vector<std::int8_t>;  // one sign per canonical edge
 struct Embedding {
   int cd;              // index into Geometry::displacements
   int a, b;            // canonical vertex indices
-  std::int64_t fac;    // embedding weight per lattice site, times the point-group order
+  std::int64_t fac;    // embedding weight per unit cell, times the point-group order
 };
 
 struct ClassInfo {
@@ -32,7 +32,7 @@ struct ClassInfo {
   std::vector<int> edge_index;  // nv*nv, -1 where no edge
   std::vector<std::vector<int>> autos;
   int matching = 0;       // double_cover_matching of the class graph
-  std::int64_t mult = 0;  // embeddings per lattice site
+  std::int64_t mult = 0;  // embeddings per unit cell
   std::vector<Embedding> embeddings;  // site-pair embeddings by displacement
   std::vector<int> keys;  // decorated keys of this class
 };

@@ -1,13 +1,16 @@
-// Bravais lattices, their point groups, and connected site clusters.
+// Lattices, their point groups, and connected site clusters.
 //
 // Sites are integer pairs (a, b) at a*e1 + b*e2.  The chain uses e1 alone
 // (b = 0), the square lattice e1 = (1, 0), e2 = (0, 1), and the triangular
-// lattice e1 = (1, 0), e2 = (1/2, sqrt3/2).  A site cluster is a connected set
-// of sites carrying every lattice bond between its members; clusters are
+// lattice e1 = (1, 0), e2 = (1/2, sqrt3/2).  The honeycomb lattice is the
+// triangular lattice without the sublattice (2a + b) = 0 (mod 3) of hexagon
+// centres, so it has two sites per unit cell.  A site cluster is a connected
+// set of sites carrying every lattice bond between its members; clusters are
 // classified modulo translation and the point group.
 #pragma once
 
 #include <compare>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -31,15 +34,27 @@ struct PointOp {
 };
 
 struct Lattice {
-  std::string name;            // "chain", "square" or "triangular"
-  std::vector<Site> dirs;      // positive bond directions
-  std::vector<PointOp> group;  // point group, identity first
-  bool currents = false;       // three-sublattice staggered current (chi, m0) defined
+  std::string name;            // "chain", "square", "triangular" or "honeycomb"
+  std::vector<Site> dirs;      // positive bond directions, between two sites
+  std::vector<PointOp> group;  // point group about the origin, identity first
+  // Sublattices: the residue of (a, b) is (form.a * a + form.b * b) mod
+  // period.  Translations are the vectors of residue 0; anchors[r] is the
+  // site of residue r to which a cluster's smallest site is translated, or
+  // empty where residue r holds no sites.  Bravais lattices have period 1.
+  int period = 1;
+  Site form{};
+  std::vector<std::optional<Site>> anchors{Site{}};
+  bool currents = false;  // three-sublattice staggered current (chi, m0) defined
+
+  int residue(Site s) const { return ((form.a * s.a + form.b * s.b) % period + period) % period; }
+  bool is_site(Site s) const { return anchors[residue(s)].has_value(); }
+  int cell_sites() const;
 };
 
 const Lattice& chain_lattice();
 const Lattice& square_lattice();
 const Lattice& triangular_lattice();
+const Lattice& honeycomb_lattice();
 
 // Throws std::invalid_argument for an unknown name.
 const Lattice& lattice_by_name(const std::string& name);
@@ -60,8 +75,8 @@ using Bond = std::pair<Site, Site>;
 // larger) and the list sorted.
 std::vector<Bond> induced_bonds(const Lattice& lat, const std::vector<Site>& sites);
 
-// Canonical representative: translated so its smallest site is the origin,
-// minimised over the point group, sorted.
+// Canonical representative: translated so its smallest site is the anchor of
+// its residue, minimised over the point group, sorted.
 std::vector<Site> canonical_sites(const Lattice& lat, const std::vector<Site>& sites);
 
 // Number of distinct translation classes in the point-group orbit.

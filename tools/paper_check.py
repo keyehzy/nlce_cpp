@@ -9,13 +9,8 @@ particle-hole gap Delta(q=0) and the equal-time structure factor
 of the Bose-Hubbard model at unit filling on the square lattice, the
 triangular lattice and the chain, through x^13 with x = t/U; Appendix A gives
 the ground-state energy of the chain through x^6.  The paper's hopping is
--t sum b^dag_i b_j, nlce_run's is +t, so a coefficient of x^k carries an extra
-(-1)^k here.  From the nlce_run series at V/U = 0,
-
-    Delta(0) = sum_d (Hp[d] + Hh[d]),   S(0) = 3 + sum_{d != 0} S[d],
-
-summing over every displacement d, i.e. each canonical one times its orbit
-size.  The on-site term of S is 2<n> + 1 = 3 at every order.
+-t sum b^dag_i b_j, as in tools/q0_series.py, which assembles these sums
+from the nlce_run series at V/U = 0.
 
 Some high-order entries of the paper are printed with a decimal point, so
 they were rounded; those are compared to a relative 1e-12 and reported as
@@ -40,6 +35,8 @@ from fractions import Fraction
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+from q0_series import lattice_q0  # noqa: E402
 
 # Coefficients a_0 .. a_13 as printed in the paper.
 PAPER = {
@@ -121,26 +118,6 @@ def parse(entry):
     else:
         value = Decimal(parts[0]) / (Decimal(parts[1]) if len(parts) > 1 else 1)
     return value, exact
-
-
-def paper_sign(k):
-    return 1 if k % 2 == 0 else -1
-
-
-def lattice_q0(d):
-    """Delta(q=0), S(q=0) and E/N in the paper's sign convention."""
-    ng = d["order_gap"]
-    gap = [Fraction(0)] * (ng + 1)
-    sq = [Fraction(0)] * (ng + 1)
-    sq[0] = Fraction(3)
-    for disp, orbit, hp, hh, s in zip(d["displacements"], d["orbit_sizes"], d["Hp"], d["Hh"], d["S"]):
-        for k in range(ng + 1):
-            gap[k] += orbit * (Fraction(hp[k]) + Fraction(hh[k]))
-            if disp != [0, 0]:
-                sq[k] += orbit * Fraction(s[k])
-    en = [Fraction(x) for x in d["EN"]]
-    flip = lambda xs: [paper_sign(k) * x for k, x in enumerate(xs)]
-    return {"gap": flip(gap), "S": flip(sq), "EN": flip(en)}
 
 
 def compare(lattice, ours):

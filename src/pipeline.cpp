@@ -355,8 +355,10 @@ private:
     for (int l = 0; l < blk.count; ++l) {
       const Modulus& m = blk.mod[l];
       u64* tot = &totals[(g0 + l) * width];
-      const u64 inv_order = m.inv(m.from_int(static_cast<i64>(geo_.lattice->group.size())));
-      const u64 mult = m.from_int(cls.mult);
+      // Embeddings are counted per unit cell; the sums are per site.
+      const u64 inv_cell = m.inv(m.from_int(geo_.lattice->cell_sites()));
+      const u64 inv_order = m.mul(inv_cell, m.inv(m.from_int(static_cast<i64>(geo_.lattice->group.size()))));
+      const u64 mult = m.mul(m.from_int(cls.mult), inv_cell);
       for (int k = k0; k <= ng_; ++k) tot[layout_.en() + k] = m.add(tot[layout_.en() + k], m.mul(mult, raw.E[k * L + l]));
       for (const Embedding& e : cls.embeddings) {
         const u64 f = m.mul(m.from_int(e.fac), inv_order);
@@ -373,7 +375,7 @@ private:
         }
       }
       for (int q = 0; q < raw.npat; ++q) {
-        const u64 km = m.from_int(geo_.keys[cls.keys[q]].mult);
+        const u64 km = m.mul(m.from_int(geo_.keys[cls.keys[q]].mult), inv_cell);
         const u64 km2 = m.add(km, km);
         for (int k = k0c; k <= nc_; ++k) {
           u64& ch = tot[layout_.chi() + k];

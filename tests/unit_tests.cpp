@@ -179,6 +179,83 @@ void test_bipartite_geometry() {
   }
 }
 
+// Honeycomb site clusters are polyiamonds: modulo symmetry the free ones
+// (A000577), per unit cell the fixed ones (A001420).
+void test_honeycomb_geometry() {
+  const int free[] = {0, 1, 1, 1, 3, 4, 12, 24, 66, 160, 448};
+  const std::int64_t fixed[] = {0, 2, 3, 6, 14, 36, 94, 250, 675, 1838, 5053};
+  const Lattice& lat = honeycomb_lattice();
+  check(lat.cell_sites() == 2, "honeycomb unit cell");
+  const Geometry geo = build_geometry(lat, 10);
+  for (int s = 1; s <= 10; ++s) {
+    std::int64_t mult = 0;
+    for (const auto& c : geo.classes) mult += c.nv == s ? c.mult : 0;
+    check(geo.cluster_counts[s] == free[s], "honeycomb clusters s=" + std::to_string(s));
+    check(mult == fixed[s], "honeycomb embeddings per cell s=" + std::to_string(s));
+  }
+  for (const auto& c : geo.classes) {
+    for (auto [i, j] : c.edges) check(i != j, "honeycomb edge");
+    for (int v = 0; v < c.nv; ++v) {
+      int deg = 0;
+      for (auto [i, j] : c.edges) deg += (i == v) + (j == v);
+      check(deg <= 3, "honeycomb degree");
+    }
+  }
+}
+
+// Per lane: Delta(q=0), S(q=0), E/N, chi and m0 residues, i.e. the
+// displacement sums weighted by orbit size.
+std::vector<std::vector<u64>> q0_sums(const Geometry& geo, const std::vector<std::vector<u64>>& series,
+                                      const std::vector<LaneSpec>& lanes, int ng, int nc) {
+  const SeriesLayout lay{ng, nc, static_cast<int>(geo.displacements.size())};
+  std::vector<std::vector<u64>> out;
+  for (std::size_t g = 0; g < series.size(); ++g) {
+    const Modulus m(lanes[g].p);
+    const auto& x = series[g];
+    std::vector<u64> sums(3 * (ng + 1) + 2 * (nc + 1), 0);
+    for (int cd = 0; cd < lay.ncd; ++cd) {
+      const Site d = geo.displacements[cd];
+      const u64 w = m.from_int(displacement_orbit_size(*geo.lattice, d));
+      for (int k = 0; k <= ng; ++k) {
+        const std::size_t at = static_cast<std::size_t>(cd) * (ng + 1) + k;
+        sums[k] = m.add(sums[k], m.mul(w, m.add(x[lay.hp() + at], x[lay.hh() + at])));
+        if (!(d == Site{})) sums[ng + 1 + k] = m.add(sums[ng + 1 + k], m.mul(w, x[lay.s() + at]));
+      }
+    }
+    for (int k = 0; k <= ng; ++k) sums[2 * (ng + 1) + k] = x[lay.en() + k];
+    for (int k = 0; k <= nc; ++k) {
+      sums[3 * (ng + 1) + k] = x[lay.chi() + k];
+      sums[3 * (ng + 1) + nc + 1 + k] = x[lay.m0() + k];
+    }
+    out.push_back(std::move(sums));
+  }
+  return out;
+}
+
+// Classifying clusters modulo the point group must not change the q = 0
+// sums: the full group and the identity alone give the same series.
+void test_point_group_reduction() {
+  std::vector<LaneSpec> lanes;
+  for (u64 p : moduli(2)) {
+    lanes.push_back({{0, 1}, p});
+    lanes.push_back({{1, 5}, p});
+  }
+  PassOptions opts;
+  opts.threads = 2;
+  opts.verbose = false;
+  for (const auto& [base, smax] : {std::pair{&honeycomb_lattice(), 8}, std::pair{&triangular_lattice(), 6}}) {
+    Lattice bare = *base;
+    bare.group = {{1, 0, 0, 1}};
+    const int ng = smax - 1, nc = base->currents ? smax - 2 : 0;
+    const Geometry full = build_geometry(*base, smax);
+    const Geometry plain = build_geometry(bare, smax);
+    check(plain.classes.size() == full.classes.size(), base->name + " classes without point group");
+    const auto a = q0_sums(full, run_pass(full, ng, nc, lanes, opts), lanes, ng, nc);
+    const auto b = q0_sums(plain, run_pass(plain, ng, nc, lanes, opts), lanes, ng, nc);
+    check(a == b, base->name + " q = 0 sums without point group");
+  }
+}
+
 // A small full run must satisfy the exact cumulant cancellation in every lane;
 // run_pass throws otherwise.
 void test_small_pass() {
@@ -240,6 +317,8 @@ int main() {
   test_double_cover_matching();
   test_geometry();
   test_bipartite_geometry();
+  test_honeycomb_geometry();
+  test_point_group_reduction();
   test_small_pass();
   test_occupation_cap();
   test_limits();
